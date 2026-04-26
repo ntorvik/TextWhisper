@@ -103,6 +103,9 @@ class TextWhisperApp(QObject):
         self.tray.set_auto_enter_enabled(
             bool(self.settings.get("auto_enter_enabled", False))
         )
+        self.tray.set_voice_enabled(
+            bool(self.settings.get("voice_enabled", False))
+        )
 
     # --- lifecycle -----------------------------------------------------
 
@@ -183,6 +186,14 @@ class TextWhisperApp(QObject):
         delete_hk = str(self.settings.get("delete_hotkey", "<delete>") or "").strip()
         if delete_hk and delete_hk != toggle:
             m["delete"] = delete_hk
+        # Voice interrupt — only register when read-back is enabled, AND
+        # only if the chord isn't already claimed by another action.
+        if bool(self.settings.get("voice_enabled", False)):
+            voice_hk = str(
+                self.settings.get("voice_interrupt_hotkey", "<ctrl>+<alt>+s") or ""
+            ).strip()
+            if voice_hk and voice_hk not in (toggle, delete_hk):
+                m["voice_interrupt"] = voice_hk
         return m
 
     def _wire_signals(self) -> None:
@@ -212,7 +223,18 @@ class TextWhisperApp(QObject):
         self.tray.show_settings.connect(self._open_settings)
         self.tray.toggle_oscilloscope.connect(self._toggle_oscilloscope)
         self.tray.toggle_auto_enter.connect(self._toggle_auto_enter)
+        self.tray.toggle_voice.connect(self._toggle_voice)
+        self.tray.interrupt_voice.connect(self._interrupt_voice)
         self.tray.quit_requested.connect(self.quit)
+
+        # TTS lifecycle drives the tray's "Stop Reading" enable state so a
+        # stale click can't ghost-call interrupt() between read-backs.
+        self.tts.speak_started.connect(
+            lambda: self.tray.set_voice_speaking(True)
+        )
+        self.tts.speak_finished.connect(
+            lambda: self.tray.set_voice_speaking(False)
+        )
 
     # --- capture control -----------------------------------------------
 
@@ -286,11 +308,32 @@ class TextWhisperApp(QObject):
             self.hotkey.disarm_cancel()
         log.info("Auto-Enter %s via tray.", "enabled" if new_state else "disabled")
 
+    def _toggle_voice(self) -> None:
+        new_state = not bool(self.settings.get("voice_enabled", False))
+        self.settings.set("voice_enabled", new_state)
+        self.tray.set_voice_enabled(new_state)
+        # Bring the IPC server up/down to match the new state.
+        if new_state and not self.voice_ipc.is_running:
+            self.voice_ipc.start()
+        elif not new_state and self.voice_ipc.is_running:
+            self.voice_ipc.stop()
+            # If a read-back was in flight, kill it too — user clearly
+            # doesn't want any more talking right now.
+            self.tts.interrupt()
+        # Re-register the interrupt hotkey to match the new state.
+        self.hotkey.update_mapping(self._build_hotkey_mapping())
+        log.info("Voice read-back %s via tray.", "enabled" if new_state else "disabled")
+
+    def _interrupt_voice(self) -> None:
+        self.tts.interrupt()
+
     # --- settings ------------------------------------------------------
 
     def _open_settings(self) -> None:
         prev_hotkey = self.settings.get("hotkey")
         prev_delete_hotkey = self.settings.get("delete_hotkey")
+        prev_voice_hotkey = self.settings.get("voice_interrupt_hotkey")
+        prev_voice_enabled = bool(self.settings.get("voice_enabled", False))
         prev_model = self.settings.get("model_size")
         prev_device = self.settings.get("device")
         prev_compute = self.settings.get("compute_type")
@@ -303,6 +346,8 @@ class TextWhisperApp(QObject):
         if (
             self.settings.get("hotkey") != prev_hotkey
             or self.settings.get("delete_hotkey") != prev_delete_hotkey
+            or self.settings.get("voice_interrupt_hotkey") != prev_voice_hotkey
+            or bool(self.settings.get("voice_enabled", False)) != prev_voice_enabled
         ):
             self.hotkey.update_mapping(self._build_hotkey_mapping())
 
@@ -326,6 +371,9 @@ class TextWhisperApp(QObject):
         # Tray label for the Auto-Enter toggle reflects whatever was saved.
         self.tray.set_auto_enter_enabled(
             bool(self.settings.get("auto_enter_enabled", False))
+        )
+        self.tray.set_voice_enabled(
+            bool(self.settings.get("voice_enabled", False))
         )
 
         if bool(self.settings.get("oscilloscope.enabled", True)):
@@ -366,6 +414,8 @@ class TextWhisperApp(QObject):
             self._toggle_capture()
         elif name == "delete":
             self._on_delete_pressed()
+        elif name == "voice_interrupt":
+            self.tts.interrupt()
         else:
             log.warning("Unknown hotkey: %s", name)
 

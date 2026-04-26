@@ -41,6 +41,8 @@ class TrayController(QObject):
     show_settings = pyqtSignal()
     toggle_oscilloscope = pyqtSignal()
     toggle_auto_enter = pyqtSignal()
+    toggle_voice = pyqtSignal()
+    interrupt_voice = pyqtSignal()
     quit_requested = pyqtSignal()
 
     def __init__(self, parent: QObject | None = None) -> None:
@@ -56,6 +58,12 @@ class TrayController(QObject):
         self.action_toggle = QAction("Start Capture")
         self.action_oscilloscope = QAction("Show Oscilloscope")
         self.action_auto_enter = QAction("Enable Auto-Enter")
+        self.action_voice = QAction("Enable Voice Read-Back")
+        # Disabled until a read-back is in progress — mirrors how the
+        # Start/Stop Capture item only flips when there's something to
+        # toggle. Phase 5 wires this active/inactive from the TTS service.
+        self.action_voice_interrupt = QAction("Stop Reading")
+        self.action_voice_interrupt.setEnabled(False)
         self.action_settings = QAction("Settings...")
         self.action_quit = QAction("Exit")
 
@@ -63,6 +71,8 @@ class TrayController(QObject):
         menu.addSeparator()
         menu.addAction(self.action_oscilloscope)
         menu.addAction(self.action_auto_enter)
+        menu.addAction(self.action_voice)
+        menu.addAction(self.action_voice_interrupt)
         menu.addAction(self.action_settings)
         menu.addSeparator()
         menu.addAction(self.action_quit)
@@ -74,6 +84,8 @@ class TrayController(QObject):
         self.action_settings.triggered.connect(self.show_settings)
         self.action_oscilloscope.triggered.connect(self.toggle_oscilloscope)
         self.action_auto_enter.triggered.connect(self.toggle_auto_enter)
+        self.action_voice.triggered.connect(self.toggle_voice)
+        self.action_voice_interrupt.triggered.connect(self.interrupt_voice)
         self.action_quit.triggered.connect(self.quit_requested)
 
         self.tray.activated.connect(self._on_activated)
@@ -101,6 +113,16 @@ class TrayController(QObject):
         self.action_auto_enter.setText(
             "Disable Auto-Enter" if enabled else "Enable Auto-Enter"
         )
+
+    def set_voice_enabled(self, enabled: bool) -> None:
+        self.action_voice.setText(
+            "Disable Voice Read-Back" if enabled else "Enable Voice Read-Back"
+        )
+
+    def set_voice_speaking(self, speaking: bool) -> None:
+        """Enable the 'Stop Reading' menu item only while a read-back is
+        in progress, so a stale click can't ghost-call interrupt."""
+        self.action_voice_interrupt.setEnabled(bool(speaking))
 
     def set_status(self, text: str) -> None:
         self.tray.setToolTip(f"TextWhisper v{__version__} - {text}")

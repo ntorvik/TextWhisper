@@ -11,7 +11,7 @@ mocked. We focus on:
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -621,6 +621,66 @@ def test_single_tap_delete_clears_continuation_state(app):
         app._on_delete_single_timeout()
     assert app._last_segment_ended_with_period is False
     assert app._continuation_pending is False
+
+
+# --- Voice hotkey + tray wiring -----------------------------------------
+
+def test_voice_hotkey_in_mapping_only_when_enabled(app):
+    app.settings.set("voice_enabled", False)
+    app.settings.set("voice_interrupt_hotkey", "<ctrl>+<alt>+s")
+    assert "voice_interrupt" not in app._build_hotkey_mapping()
+
+    app.settings.set("voice_enabled", True)
+    assert app._build_hotkey_mapping().get("voice_interrupt") == "<ctrl>+<alt>+s"
+
+
+def test_voice_hotkey_dropped_when_clashes_with_toggle_or_delete(app):
+    app.settings.set("voice_enabled", True)
+    app.settings.set("hotkey", "<alt>+z")
+    app.settings.set("delete_hotkey", "<delete>")
+    app.settings.set("voice_interrupt_hotkey", "<alt>+z")  # clashes with toggle
+    assert "voice_interrupt" not in app._build_hotkey_mapping()
+    app.settings.set("voice_interrupt_hotkey", "<delete>")  # clashes with delete
+    assert "voice_interrupt" not in app._build_hotkey_mapping()
+    app.settings.set("voice_interrupt_hotkey", "<ctrl>+<alt>+s")  # unique
+    assert "voice_interrupt" in app._build_hotkey_mapping()
+
+
+def test_voice_interrupt_hotkey_calls_tts_interrupt(app):
+    with patch.object(app.tts, "interrupt") as i:
+        app._on_hotkey_triggered("voice_interrupt")
+    i.assert_called_once()
+
+
+def test_tray_toggle_voice_flips_setting_and_label(app):
+    app.settings.set("voice_enabled", False)
+    with patch.object(app.tray, "set_voice_enabled") as set_label, patch.object(
+        app.voice_ipc, "start"
+    ) as ipc_start, patch.object(app.hotkey, "update_mapping"):
+        app._toggle_voice()
+    assert app.settings.get("voice_enabled") is True
+    set_label.assert_called_once_with(True)
+    ipc_start.assert_called_once()
+
+
+def test_tray_toggle_voice_off_stops_ipc_and_interrupts_tts(app):
+    app.settings.set("voice_enabled", True)
+    app.voice_ipc._httpd = MagicMock()  # simulate "running"
+    with patch.object(app.voice_ipc, "stop") as ipc_stop, patch.object(
+        app.tts, "interrupt"
+    ) as ti, patch.object(app.tray, "set_voice_enabled"), patch.object(
+        app.hotkey, "update_mapping"
+    ):
+        app._toggle_voice()
+    assert app.settings.get("voice_enabled") is False
+    ipc_stop.assert_called_once()
+    ti.assert_called_once()
+
+
+def test_tray_interrupt_voice_calls_tts_interrupt(app):
+    with patch.object(app.tts, "interrupt") as i:
+        app._interrupt_voice()
+    i.assert_called_once()
 
 
 def test_full_continuation_flow_end_to_end(app):

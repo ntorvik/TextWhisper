@@ -47,6 +47,8 @@ def test_action_triggers_emit_signals(qapp):
         "settings": 0,
         "oscilloscope": 0,
         "auto_enter": 0,
+        "voice": 0,
+        "voice_interrupt": 0,
         "quit": 0,
     }
     tray.toggle_capture.connect(lambda: received.__setitem__("toggle", received["toggle"] + 1))
@@ -57,12 +59,21 @@ def test_action_triggers_emit_signals(qapp):
     tray.toggle_auto_enter.connect(
         lambda: received.__setitem__("auto_enter", received["auto_enter"] + 1)
     )
+    tray.toggle_voice.connect(lambda: received.__setitem__("voice", received["voice"] + 1))
+    # interrupt_voice is wired to an action that's disabled by default —
+    # enable it for this test so we can verify the signal path.
+    tray.set_voice_speaking(True)
+    tray.interrupt_voice.connect(
+        lambda: received.__setitem__("voice_interrupt", received["voice_interrupt"] + 1)
+    )
     tray.quit_requested.connect(lambda: received.__setitem__("quit", received["quit"] + 1))
 
     tray.action_toggle.trigger()
     tray.action_settings.trigger()
     tray.action_oscilloscope.trigger()
     tray.action_auto_enter.trigger()
+    tray.action_voice.trigger()
+    tray.action_voice_interrupt.trigger()
     tray.action_quit.trigger()
     qapp.processEvents()
 
@@ -71,5 +82,25 @@ def test_action_triggers_emit_signals(qapp):
         "settings": 1,
         "oscilloscope": 1,
         "auto_enter": 1,
+        "voice": 1,
+        "voice_interrupt": 1,
         "quit": 1,
     }
+
+
+def test_set_voice_enabled_toggles_text(qapp):
+    tray = TrayController()
+    assert tray.action_voice.isCheckable() is False
+    tray.set_voice_enabled(False)
+    assert tray.action_voice.text() == "Enable Voice Read-Back"
+    tray.set_voice_enabled(True)
+    assert tray.action_voice.text() == "Disable Voice Read-Back"
+
+
+def test_voice_interrupt_disabled_until_speaking(qapp):
+    tray = TrayController()
+    assert tray.action_voice_interrupt.isEnabled() is False
+    tray.set_voice_speaking(True)
+    assert tray.action_voice_interrupt.isEnabled() is True
+    tray.set_voice_speaking(False)
+    assert tray.action_voice_interrupt.isEnabled() is False
