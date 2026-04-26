@@ -148,6 +148,34 @@ class KeyboardOutput:
             except Exception:
                 log.exception("send_enter failed")
 
+    def replace_last_period_with_comma(self, had_trailing_space: bool) -> None:
+        """Backspace over the trailing '.' (and optional space) and emit ','.
+
+        Used by the continuation-detection feature: Whisper transcribes each
+        VAD-cut segment in isolation and reflexively ends each one with a
+        period, even when the user was just taking a breath mid-sentence.
+        When the user resumes speaking within the continuation window, we
+        retroactively demote that period to a comma so the result reads as
+        one flowing sentence.
+        """
+        n = 2 if had_trailing_space else 1
+        with self._lock:
+            try:
+                for _ in range(n):
+                    self._kb.press(Key.backspace)
+                    self._kb.release(Key.backspace)
+                self._tap_char(",")
+                if had_trailing_space:
+                    self._tap_char(" ")
+                log.info(
+                    "Replaced trailing %r with %r (continuation, trailing_space=%s).",
+                    ". " if had_trailing_space else ".",
+                    ", " if had_trailing_space else ",",
+                    had_trailing_space,
+                )
+            except Exception:
+                log.exception("replace_last_period_with_comma failed")
+
     def delete_chars(self, count: int) -> None:
         if count <= 0:
             return

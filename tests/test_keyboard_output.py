@@ -216,3 +216,37 @@ def test_send_enter_sends_enter_keystroke(tmp_appdata):
     releases = [c.args[0] for c in mock.release.call_args_list]
     assert Key.enter in presses
     assert Key.enter in releases
+
+
+def test_replace_last_period_with_comma_with_trailing_space(tmp_appdata):
+    """trailing_space=True: erase '. ' (2 chars), emit ',' + ' '."""
+    from pynput.keyboard import Key
+
+    kb, mock = _kb(tmp_appdata)
+    kb.replace_last_period_with_comma(had_trailing_space=True)
+
+    backspaces = [
+        c.args[0] for c in mock.press.call_args_list if c.args[0] == Key.backspace
+    ]
+    assert len(backspaces) == 2
+    typed_chars = [c.args[0] for c in mock.type.call_args_list]
+    assert "".join(typed_chars) == ","
+    space_presses = [c.args[0] for c in mock.press.call_args_list if c.args[0] == Key.space]
+    assert len(space_presses) == 1
+
+
+def test_replace_last_period_with_comma_without_trailing_space(tmp_appdata):
+    """trailing_space=False: erase '.' (1 char), emit ',' (no space)."""
+    from pynput.keyboard import Key
+
+    kb, mock = _kb(tmp_appdata)
+    kb.replace_last_period_with_comma(had_trailing_space=False)
+
+    backspaces = [
+        c.args[0] for c in mock.press.call_args_list if c.args[0] == Key.backspace
+    ]
+    assert len(backspaces) == 1
+    typed_chars = [c.args[0] for c in mock.type.call_args_list]
+    assert "".join(typed_chars) == ","
+    space_presses = [c.args[0] for c in mock.press.call_args_list if c.args[0] == Key.space]
+    assert space_presses == []

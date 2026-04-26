@@ -281,6 +281,41 @@ class SettingsDialog(QDialog):
         self.thresh_spin.setDecimals(3)
         self.thresh_spin.setValue(float(self.settings.get("vad_threshold", 0.012)))
         form.addRow("Voice threshold (RMS):", self.thresh_spin)
+
+        self.continuation_check = QCheckBox("Treat short pauses as commas")
+        self.continuation_check.setChecked(
+            bool(self.settings.get("continuation_detection_enabled", False))
+        )
+        self.continuation_check.setToolTip(
+            "Whisper transcribes each VAD-cut segment in isolation and ends "
+            "every segment with a period — even when you were just taking a "
+            "breath mid-sentence.\n\n"
+            "When enabled, if you resume speaking within the continuation "
+            "window of a typed segment that ended in '.', that period is "
+            "demoted to ',' and the next segment's first letter is "
+            "lowercased. Result: one flowing sentence instead of choppy "
+            "stand-alone sentences."
+        )
+        form.addRow("Continuation:", self.continuation_check)
+
+        self.continuation_window_spin = QSpinBox()
+        self.continuation_window_spin.setRange(100, 2000)
+        self.continuation_window_spin.setSingleStep(50)
+        self.continuation_window_spin.setSuffix(" ms")
+        self.continuation_window_spin.setValue(
+            int(self.settings.get("continuation_window_ms", 500))
+        )
+        self.continuation_window_spin.setToolTip(
+            "How quickly you must resume speaking after a typed segment for "
+            "its trailing period to be demoted to a comma. Shorter values "
+            "(~300 ms) only catch genuine breath-pauses; longer values "
+            "(~800 ms) merge sentences more aggressively."
+        )
+        self.continuation_window_spin.setEnabled(self.continuation_check.isChecked())
+        self.continuation_check.toggled.connect(
+            self.continuation_window_spin.setEnabled
+        )
+        form.addRow("Continuation window:", self.continuation_window_spin)
         return page
 
     def _build_output_tab(self) -> QWidget:
@@ -641,6 +676,14 @@ class SettingsDialog(QDialog):
         self.settings.set("language", self.lang_combo.currentText().strip() or "auto")
         self.settings.set("vad_silence_ms", int(self.silence_spin.value()))
         self.settings.set("vad_threshold", float(self.thresh_spin.value()))
+        self.settings.set(
+            "continuation_detection_enabled",
+            bool(self.continuation_check.isChecked()),
+        )
+        self.settings.set(
+            "continuation_window_ms",
+            int(self.continuation_window_spin.value()),
+        )
         self.settings.set("type_delay_ms", int(self.delay_spin.value()))
         self.settings.set("output_method", str(self.output_method_combo.currentData()))
         self.settings.set("oscilloscope.enabled", bool(self.osc_check.isChecked()))

@@ -452,6 +452,212 @@ def test_stop_capture_resets_user_is_speaking(app):
     assert app._user_is_speaking is False
 
 
+# --- Continuation detection ('Treat short pauses as commas') -------------
+
+def test_continuation_disabled_no_demote_on_resume(app):
+    """Default off: speech_started after a period-ending segment must NOT
+    backspace-and-rewrite, even within the window."""
+    import time as time_mod
+
+    app.settings.set("continuation_detection_enabled", False)
+    app._last_segment_ended_with_period = True
+    app._typing_finished_at = time_mod.monotonic()
+    with patch.object(app.keyboard_out, "replace_last_period_with_comma") as r:
+        app._on_speech_started()
+    r.assert_not_called()
+    assert app._continuation_pending is False
+
+
+def test_continuation_enabled_demotes_period_within_window(app):
+    """Enabled + within window + period-ending segment -> demote to comma."""
+    import time as time_mod
+
+    app.settings.set("continuation_detection_enabled", True)
+    app.settings.set("continuation_window_ms", 600)
+    app.settings.set("trailing_space", True)
+    app._last_segment_ended_with_period = True
+    app._typing_finished_at = time_mod.monotonic()
+    with patch.object(app.keyboard_out, "replace_last_period_with_comma") as r:
+        app._on_speech_started()
+    r.assert_called_once_with(True)
+    assert app._continuation_pending is True
+    assert app._last_segment_ended_with_period is False
+
+
+def test_continuation_outside_window_does_not_demote(app):
+    """Resume after the configured window -> period stays."""
+    app.settings.set("continuation_detection_enabled", True)
+    app.settings.set("continuation_window_ms", 500)
+    app._last_segment_ended_with_period = True
+    app._typing_finished_at = 0.0  # long ago
+    with patch.object(app.keyboard_out, "replace_last_period_with_comma") as r:
+        app._on_speech_started()
+    r.assert_not_called()
+    assert app._continuation_pending is False
+
+
+def test_continuation_no_period_does_not_demote(app):
+    """If the previous segment didn't end in '.', nothing to demote."""
+    import time as time_mod
+
+    app.settings.set("continuation_detection_enabled", True)
+    app._last_segment_ended_with_period = False
+    app._typing_finished_at = time_mod.monotonic()
+    with patch.object(app.keyboard_out, "replace_last_period_with_comma") as r:
+        app._on_speech_started()
+    r.assert_not_called()
+
+
+def test_continuation_pending_lowercases_next_segment(app):
+    """After demote, the next transcription's first letter is lowercased."""
+    app.settings.set("continuation_detection_enabled", True)
+    app.settings.set("auto_enter_enabled", False)
+    app._continuation_pending = True
+    app._user_is_speaking = False
+    with patch.object(app.keyboard_out, "type_text", return_value=10) as t:
+        app._on_transcription("World today")
+    t.assert_called_once_with("world today")
+    assert app._continuation_pending is False
+
+
+def test_continuation_pending_skipped_when_disabled(app):
+    """Stale flag must not affect output if the feature is now disabled."""
+    app.settings.set("continuation_detection_enabled", False)
+    app._continuation_pending = True
+    with patch.object(app.keyboard_out, "type_text", return_value=10) as t:
+        app._on_transcription("World today")
+    t.assert_called_once_with("World today")  # untouched
+
+
+def test_in_text_demote_when_user_still_speaking(app):
+    """If transcription returns while user_is_speaking=True, demote the
+    trailing '.' BEFORE typing and mark next segment as continuation."""
+    app.settings.set("continuation_detection_enabled", True)
+    app.settings.set("auto_enter_enabled", False)
+    app._user_is_speaking = True
+    app._continuation_pending = False
+    with patch.object(app.keyboard_out, "type_text", return_value=10) as t:
+        app._on_transcription("Hello world.")
+    t.assert_called_once_with("Hello world,")
+    assert app._continuation_pending is True
+
+
+def test_ellipsis_not_demoted(app):
+    """Text ending with '...' is left alone — that's not a sentence end to
+    rewrite, that's intentional ellipsis."""
+    app.settings.set("continuation_detection_enabled", True)
+    app._user_is_speaking = True
+    with patch.object(app.keyboard_out, "type_text", return_value=10) as t:
+        app._on_transcription("Wait...")
+    t.assert_called_once_with("Wait...")  # untouched
+
+
+def test_question_mark_not_demoted(app):
+    """'?' is a stronger sentence ender than '.' — leave it alone."""
+    app.settings.set("continuation_detection_enabled", True)
+    app._user_is_speaking = True
+    with patch.object(app.keyboard_out, "type_text", return_value=10) as t:
+        app._on_transcription("Really?")
+    t.assert_called_once_with("Really?")
+
+
+def test_last_segment_period_flag_tracked_across_transcriptions(app):
+    """After typing a '.'-ending segment, flag goes True; after a non-'.'
+    segment, flag goes False."""
+    app.settings.set("auto_enter_enabled", False)
+    app._user_is_speaking = False
+    app._continuation_pending = False
+    with patch.object(app.keyboard_out, "type_text", return_value=10):
+        app._on_transcription("Hello world.")
+    assert app._last_segment_ended_with_period is True
+    with patch.object(app.keyboard_out, "type_text", return_value=10):
+        app._on_transcription("then nothing")
+    assert app._last_segment_ended_with_period is False
+
+
+def test_auto_enter_timeout_clears_continuation_state(app):
+    """Once Enter is pressed the cursor moved past the previous segment;
+    any pending continuation context is moot."""
+    app._last_segment_ended_with_period = True
+    app._continuation_pending = True
+    with patch.object(app.hotkey, "disarm_cancel"), patch.object(
+        app.keyboard_out, "send_enter"
+    ):
+        app._on_auto_enter_timeout()
+    assert app._last_segment_ended_with_period is False
+    assert app._continuation_pending is False
+
+
+def test_stop_capture_clears_continuation_state(app):
+    app._is_capturing = True
+    app._last_segment_ended_with_period = True
+    app._continuation_pending = True
+    with patch.object(app.audio, "stop"), patch.object(app.sound_player, "play_stop"):
+        app._stop_capture()
+    assert app._last_segment_ended_with_period is False
+    assert app._continuation_pending is False
+
+
+def test_double_tap_delete_clears_continuation_state(app):
+    """Popping a typed segment off the stack invalidates the continuation
+    context — that period is gone now."""
+    app._typed_history = [11]
+    app._last_segment_ended_with_period = True
+    app._continuation_pending = True
+    app._delete_pending = True
+    with patch.object(app.keyboard_out, "delete_chars"):
+        app._on_delete_pressed()
+    assert app._last_segment_ended_with_period is False
+    assert app._continuation_pending is False
+
+
+def test_single_tap_delete_clears_continuation_state(app):
+    app._delete_pending = True
+    app._last_segment_ended_with_period = True
+    app._continuation_pending = True
+    with patch.object(app.keyboard_out, "delete_word"), patch.object(
+        app.keyboard_out, "delete_chars"
+    ):
+        app._on_delete_single_timeout()
+    assert app._last_segment_ended_with_period is False
+    assert app._continuation_pending is False
+
+
+def test_full_continuation_flow_end_to_end(app):
+    """Type 'Hello world.' -> resume within window -> next segment 'But I
+    changed my mind.' -> result types as 'Hello world,' (via post-hoc
+    demote) and 'but I changed my mind.' (via continuation_pending)."""
+    import time as time_mod
+
+    app.settings.set("continuation_detection_enabled", True)
+    app.settings.set("continuation_window_ms", 600)
+    app.settings.set("auto_enter_enabled", False)
+    app.settings.set("trailing_space", True)
+
+    # Segment #1 typed.
+    with patch.object(app.keyboard_out, "type_text", return_value=12):
+        app._on_transcription("Hello world.")
+    assert app._last_segment_ended_with_period is True
+    app._typing_finished_at = time_mod.monotonic()  # ensure 'now'
+
+    # User resumes within the window — period demoted, continuation pending.
+    with patch.object(app.keyboard_out, "replace_last_period_with_comma") as r:
+        app._on_speech_started()
+    r.assert_called_once_with(True)
+    assert app._continuation_pending is True
+
+    # User pauses (silence detected) — speaking flag clears.
+    app._on_speech_ended()
+    assert app._user_is_speaking is False
+
+    # Segment #2 typed — first letter lowercased due to continuation.
+    with patch.object(app.keyboard_out, "type_text", return_value=10) as t:
+        app._on_transcription("But I changed my mind.")
+    t.assert_called_once_with("but I changed my mind.")
+    assert app._continuation_pending is False
+    assert app._last_segment_ended_with_period is True
+
+
 def test_transcription_skips_clipboard_when_disabled(app):
     from PyQt6.QtWidgets import QApplication
 

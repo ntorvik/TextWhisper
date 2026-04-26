@@ -82,6 +82,12 @@ class TextWhisperApp(QObject):
         # timer until they actually fall silent again (the next transcription
         # cycle will arm it).
         self._user_is_speaking = False
+        # Continuation detection ("Treat short pauses as commas"). Whisper
+        # transcribes each VAD-cut segment in isolation and reflexively ends
+        # each one with '.'. When the user resumes speaking quickly we
+        # retroactively demote that '.' to ',' and lowercase the next segment.
+        self._last_segment_ended_with_period = False
+        self._continuation_pending = False
 
         self._wire_signals()
 
@@ -238,6 +244,9 @@ class TextWhisperApp(QObject):
         # arriving after stop would be treated as "still speaking" and skip
         # arming auto-Enter.
         self._user_is_speaking = False
+        # Continuation context dies with the capture session.
+        self._last_segment_ended_with_period = False
+        self._continuation_pending = False
         self.tray.set_active(False)
         self.oscilloscope.set_active(False)
         self.oscilloscope.clear()
@@ -378,6 +387,9 @@ class TextWhisperApp(QObject):
                     "Double-tap delete: history empty — nothing to erase. "
                     "(Earlier transcriptions were already removed or were never tracked.)"
                 )
+            # Manual edit invalidates any pending continuation.
+            self._last_segment_ended_with_period = False
+            self._continuation_pending = False
             return
         # Defer single-tap action so a second press can upgrade to double-tap.
         self._delete_pending = True
@@ -400,15 +412,39 @@ class TextWhisperApp(QObject):
             self._extra_chars_typed_by_hotkey = 0
         log.info("Single-tap delete: erasing previous word.")
         self.keyboard_out.delete_word()
+        # Manual edit invalidates any pending continuation.
+        self._last_segment_ended_with_period = False
+        self._continuation_pending = False
 
     # --- engine + audio callbacks --------------------------------------
 
     def _on_transcription(self, text: str) -> None:
+        # Continuation: previous segment's '.' was demoted to ',' on resume.
+        # Lowercase this segment's first letter so the result reads as one
+        # flowing sentence ("...world, but I changed my mind.").
+        if self._continuation_enabled() and self._continuation_pending and text:
+            if text[0].isupper():
+                text = text[0].lower() + text[1:]
+            self._continuation_pending = False
+        # In-text demotion: if Whisper returned this segment WHILE the user
+        # was still actively speaking (resumed during transcription latency),
+        # the trailing '.' is spurious. Replace it before typing and mark the
+        # NEXT segment as a continuation too.
+        if (
+            self._continuation_enabled()
+            and self._user_is_speaking
+            and self._ends_with_single_period(text)
+        ):
+            text = text[:-1] + ","
+            self._continuation_pending = True
+            log.info("Continuation in-text — segment '.' demoted before typing.")
+
         typed = self.keyboard_out.type_text(text)
         if typed > 0:
             self._typed_history.append(typed)
             if len(self._typed_history) > self._typed_history_max:
                 self._typed_history = self._typed_history[-self._typed_history_max:]
+            self._last_segment_ended_with_period = self._ends_with_single_period(text)
         self._last_typed_text = text
         # New dictation -> reset the hotkey-stray-char counter so subsequent
         # delete presses are scoped to this segment.
@@ -466,6 +502,10 @@ class TextWhisperApp(QObject):
         # a subsequent (already disarmed) cancel.
         self.hotkey.disarm_cancel()
         self.keyboard_out.send_enter()
+        # The cursor has moved past the previous segment's trailing period,
+        # so any pending continuation is moot.
+        self._last_segment_ended_with_period = False
+        self._continuation_pending = False
         log.info("Auto-Enter fired.")
 
     def _on_speech_started(self) -> None:
@@ -477,8 +517,14 @@ class TextWhisperApp(QObject):
         Also flips :attr:`_user_is_speaking` so that if Whisper finishes the
         previous segment while the user is mid-utterance, ``_on_transcription``
         will defer arming the timer instead of starting it during speech.
+
+        If continuation detection is enabled and the previous typed segment
+        ended in '.' within the continuation window, retroactively demote
+        that period to a comma — Whisper added it because each segment is
+        transcribed in isolation, but the user actually meant a comma-pause.
         """
         self._user_is_speaking = True
+        self._maybe_demote_previous_period()
         if self._auto_enter_timer.isActive():
             self._auto_enter_timer.stop()
             self.hotkey.disarm_cancel()
@@ -491,6 +537,34 @@ class TextWhisperApp(QObject):
         to arm the auto-Enter timer.
         """
         self._user_is_speaking = False
+
+    # --- continuation detection ---------------------------------------
+
+    def _continuation_enabled(self) -> bool:
+        return bool(self.settings.get("continuation_detection_enabled", False))
+
+    def _continuation_window_s(self) -> float:
+        return max(100, int(self.settings.get("continuation_window_ms", 500))) / 1000.0
+
+    def _maybe_demote_previous_period(self) -> None:
+        """If the last typed segment ended in '.' AND we're inside the
+        continuation window, backspace the period and emit ',' instead."""
+        if not self._continuation_enabled():
+            return
+        if not self._last_segment_ended_with_period:
+            return
+        if (time.monotonic() - self._typing_finished_at) >= self._continuation_window_s():
+            return
+        had_trailing_space = bool(self.settings.get("trailing_space", True))
+        self.keyboard_out.replace_last_period_with_comma(had_trailing_space)
+        self._continuation_pending = True
+        self._last_segment_ended_with_period = False
+        log.info("Continuation detected — previous '.' demoted to ','.")
+
+    @staticmethod
+    def _ends_with_single_period(text: str) -> bool:
+        """True iff ``text`` ends with exactly one '.', not '..' or '...'."""
+        return text.endswith(".") and not text.endswith("..")
 
     def _on_engine_error(self, message: str) -> None:
         self._notify("TextWhisper - Whisper error", message, error=True)

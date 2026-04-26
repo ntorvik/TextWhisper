@@ -20,6 +20,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Cancelled silently if you press ANY key during the window.
     "auto_enter_enabled": False,
     "auto_enter_delay_ms": 3000,
+    # "Treat short pauses as commas": Whisper transcribes each VAD-cut
+    # segment in isolation and reflexively ends each one with a period —
+    # even when the user was just taking a breath mid-sentence. With this
+    # enabled, if the user resumes speaking within `continuation_window_ms`
+    # of a typed segment that ended in '.', that period is rewritten as a
+    # ',' and the next segment's first letter is lowercased.
+    "continuation_detection_enabled": False,
+    "continuation_window_ms": 500,
     "model_size": "large-v3",
     "compute_type": "float16",
     "device": "cuda",
