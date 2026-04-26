@@ -1,0 +1,12 @@
+faster-whisper>=1.1.0
+PyQt6>=6.7.0
+sounddevice>=0.4.6
+numpy>=1.26.0
+pynput>=1.7.7
+
+# Windows-only: pywin32 powers the silent .lnk shortcut + named-mutex single-instance lock.
+pywin32>=306; sys_platform == 'win32'
+
+# CUDA runtime (Windows + Linux) — installed automatically by install.bat / install.sh
+# when an NVIDIA GPU is detected. macOS skips these (no CUDA on Apple Silicon).
+# To install manually:  pip install nvidia-cublas-cu12 nvidia-cudnn-cu12

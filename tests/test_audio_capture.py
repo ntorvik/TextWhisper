@@ -1,0 +1,152 @@
+"""Tests for AudioCapture VAD segmentation logic.
+
+These tests exercise the callback path directly (no real microphone) by feeding
+synthetic audio blocks and inspecting the segments emitted via the Qt signal.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+
+from src.audio_capture import AudioCapture
+from src.settings_manager import SettingsManager
+
+SR = AudioCapture.SAMPLE_RATE
+BS = AudioCapture.BLOCK_SAMPLES
+
+
+def _silence(amp: float = 0.0) -> np.ndarray:
+    return np.full(BS, amp, dtype=np.float32)
+
+
+def _tone(amp: float = 0.3, freq: float = 440.0) -> np.ndarray:
+    t = np.arange(BS, dtype=np.float32) / SR
+    return (amp * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+
+
+def _emit_block(cap: AudioCapture, block: np.ndarray) -> None:
+    cap._callback(block.reshape(-1, 1), len(block), None, None)
+
+
+def _make_capture(tmp_appdata, **overrides) -> tuple[AudioCapture, list[np.ndarray]]:
+    sm = SettingsManager()
+    for k, v in overrides.items():
+        sm.set(k, v)
+    cap = AudioCapture(sm)
+    captured: list[np.ndarray] = []
+    cap.segment_ready.connect(captured.append)
+    return cap, captured
+
+
+def test_segments_emit_after_silence(tmp_appdata, qapp):
+    cap, segs = _make_capture(
+        tmp_appdata,
+        vad_threshold=0.05,
+        vad_silence_ms=120,
+        vad_min_segment_ms=30,
+        vad_preroll_ms=0,
+    )
+    for _ in range(10):
+        _emit_block(cap, _tone(amp=0.3))
+    for _ in range(6):
+        _emit_block(cap, _silence(0.0))
+
+    qapp.processEvents()
+    assert len(segs) == 1
+    assert len(segs[0]) >= 10 * BS
+
+
+def test_no_segment_when_only_silence(tmp_appdata, qapp):
+    cap, segs = _make_capture(
+        tmp_appdata,
+        vad_threshold=0.05,
+        vad_silence_ms=100,
+        vad_preroll_ms=0,
+    )
+    for _ in range(20):
+        _emit_block(cap, _silence(0.0))
+    qapp.processEvents()
+    assert segs == []
+
+
+def test_max_segment_forces_flush(tmp_appdata, qapp):
+    cap, segs = _make_capture(
+        tmp_appdata,
+        vad_threshold=0.05,
+        vad_silence_ms=10000,
+        vad_max_segment_ms=300,
+        vad_min_segment_ms=30,
+        vad_preroll_ms=0,
+    )
+    blocks_for_300ms = (300 * SR // 1000) // BS + 2
+    for _ in range(blocks_for_300ms):
+        _emit_block(cap, _tone(amp=0.3))
+    qapp.processEvents()
+    assert len(segs) >= 1
+
+
+def test_min_segment_drops_brief_blip(tmp_appdata, qapp):
+    cap, segs = _make_capture(
+        tmp_appdata,
+        vad_threshold=0.05,
+        vad_silence_ms=60,
+        vad_min_segment_ms=300,
+        vad_preroll_ms=0,
+    )
+    _emit_block(cap, _tone(amp=0.3))
+    for _ in range(6):
+        _emit_block(cap, _silence(0.0))
+    qapp.processEvents()
+    assert segs == []
+
+
+def test_preroll_prepended_on_speech_onset(tmp_appdata, qapp):
+    cap, segs = _make_capture(
+        tmp_appdata,
+        vad_threshold=0.05,
+        vad_silence_ms=120,
+        vad_min_segment_ms=30,
+        vad_preroll_ms=90,
+    )
+    for _ in range(5):
+        _emit_block(cap, _silence(0.0))
+    for _ in range(5):
+        _emit_block(cap, _tone(amp=0.3))
+    for _ in range(6):
+        _emit_block(cap, _silence(0.0))
+    qapp.processEvents()
+    assert len(segs) == 1
+    expected_min_blocks = 5 + (90 // 30)
+    assert len(segs[0]) >= expected_min_blocks * BS
+
+
+def test_audio_level_emitted_each_block(tmp_appdata, qapp):
+    cap, _ = _make_capture(tmp_appdata, vad_threshold=0.05, vad_preroll_ms=0)
+    levels: list[np.ndarray] = []
+    cap.audio_level.connect(levels.append)
+    for _ in range(4):
+        _emit_block(cap, _tone(amp=0.2))
+    qapp.processEvents()
+    assert len(levels) == 4
+    for chunk in levels:
+        assert chunk.shape == (BS,)
+
+
+def test_two_utterances_emit_two_segments(tmp_appdata, qapp):
+    cap, segs = _make_capture(
+        tmp_appdata,
+        vad_threshold=0.05,
+        vad_silence_ms=90,
+        vad_min_segment_ms=30,
+        vad_preroll_ms=0,
+    )
+    for _ in range(8):
+        _emit_block(cap, _tone(amp=0.3))
+    for _ in range(6):
+        _emit_block(cap, _silence(0.0))
+    for _ in range(8):
+        _emit_block(cap, _tone(amp=0.3))
+    for _ in range(6):
+        _emit_block(cap, _silence(0.0))
+    qapp.processEvents()
+    assert len(segs) == 2
