@@ -6,6 +6,8 @@ from PyQt6.QtCore import QObject, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QBrush, QColor, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QMenu, QSystemTrayIcon
 
+from .. import __version__
+
 
 def _build_icon(active: bool) -> QIcon:
     pm = QPixmap(64, 64)
@@ -45,7 +47,7 @@ class TrayController(QObject):
         super().__init__(parent)
         self.tray = QSystemTrayIcon(parent)
         self.tray.setIcon(_build_icon(False))
-        self.tray.setToolTip("TextWhisper - Idle")
+        self.tray.setToolTip(f"TextWhisper v{__version__} - Idle")
 
         menu = QMenu()
         # Convention for all toggle items: the menu text says what the NEXT
@@ -86,7 +88,8 @@ class TrayController(QObject):
 
     def set_active(self, active: bool) -> None:
         self.tray.setIcon(_build_icon(active))
-        self.tray.setToolTip("TextWhisper - Listening" if active else "TextWhisper - Idle")
+        suffix = "Listening" if active else "Idle"
+        self.tray.setToolTip(f"TextWhisper v{__version__} - {suffix}")
         self.action_toggle.setText("Stop Capture" if active else "Start Capture")
 
     def set_oscilloscope_visible(self, visible: bool) -> None:
@@ -100,7 +103,7 @@ class TrayController(QObject):
         )
 
     def set_status(self, text: str) -> None:
-        self.tray.setToolTip(f"TextWhisper - {text}")
+        self.tray.setToolTip(f"TextWhisper v{__version__} - {text}")
 
     def notify(self, title: str, message: str, *, error: bool = False) -> None:
         icon = (

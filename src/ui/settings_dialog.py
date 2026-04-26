@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from .. import __version__
 from ..hotkey_manager import validate_hotkeys
 from .hotkey_recorder import HotkeyRecorder
 
@@ -149,6 +150,7 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._build_output_tab(), "Output")
         self.tabs.addTab(self._build_feedback_tab(), "Feedback")
         self.tabs.addTab(self._build_oscilloscope_tab(), "Oscilloscope")
+        self.tabs.addTab(self._build_about_tab(), "About")
 
         info = QLabel(
             "Note: changing model or device reloads Whisper in the background. "
@@ -459,6 +461,79 @@ class SettingsDialog(QDialog):
         self.osc_reset_size_btn = QPushButton("Reset size")
         self.osc_reset_size_btn.clicked.connect(self._reset_osc_size)
         form.addRow("", self._row(self.osc_reset_pos_btn, self.osc_reset_size_btn, stretch=True))
+        return page
+
+    def _build_about_tab(self) -> QWidget:
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(20, 20, 20, 20)
+        v.setSpacing(10)
+
+        # Detect whether we're running from source or from a PyInstaller bundle.
+        import sys
+        build_mode = "PyInstaller .exe" if getattr(sys, "frozen", False) else "Source (Python)"
+
+        title = QLabel("<h2>TextWhisper</h2>")
+        title.setTextFormat(Qt.TextFormat.RichText)
+        v.addWidget(title)
+
+        version_label = QLabel(f"<b>Version:</b> {__version__}    <b>Build:</b> {build_mode}")
+        version_label.setTextFormat(Qt.TextFormat.RichText)
+        v.addWidget(version_label)
+
+        tagline = QLabel(
+            "Local, offline voice-to-text. Press a hotkey, talk, your words appear "
+            "in whatever app has focus. Nothing is sent to the cloud."
+        )
+        tagline.setWordWrap(True)
+        tagline.setStyleSheet("color: #aaa;")
+        v.addWidget(tagline)
+
+        v.addSpacing(8)
+
+        repo = QLabel(
+            '<a href="https://github.com/ntorvik/TextWhisper" '
+            'style="color:#5aa9ff;">https://github.com/ntorvik/TextWhisper</a>'
+        )
+        repo.setTextFormat(Qt.TextFormat.RichText)
+        repo.setOpenExternalLinks(True)
+        v.addWidget(repo)
+
+        license_label = QLabel("Released under the <b>MIT License</b>.")
+        license_label.setTextFormat(Qt.TextFormat.RichText)
+        v.addWidget(license_label)
+
+        v.addSpacing(8)
+
+        ack_header = QLabel("<b>Built on top of:</b>")
+        ack_header.setTextFormat(Qt.TextFormat.RichText)
+        v.addWidget(ack_header)
+
+        ack = QLabel(
+            "• <a href='https://github.com/SYSTRAN/faster-whisper' style='color:#5aa9ff;'>"
+            "faster-whisper</a> (CTranslate2 + Whisper) for transcription<br>"
+            "• <a href='https://github.com/moses-palmer/pynput' style='color:#5aa9ff;'>"
+            "pynput</a> for global hotkeys + keyboard injection<br>"
+            "• <a href='https://python-sounddevice.readthedocs.io/' style='color:#5aa9ff;'>"
+            "sounddevice</a> for microphone I/O<br>"
+            "• <a href='https://www.riverbankcomputing.com/software/pyqt/' style='color:#5aa9ff;'>"
+            "PyQt6</a> for the UI<br>"
+            "• <a href='https://pyinstaller.org/' style='color:#5aa9ff;'>PyInstaller</a> "
+            "for cross-platform packaging"
+        )
+        ack.setTextFormat(Qt.TextFormat.RichText)
+        ack.setOpenExternalLinks(True)
+        ack.setWordWrap(True)
+        v.addWidget(ack)
+
+        v.addStretch(1)
+
+        log_path_label = QLabel(
+            "<small style='color:#888;'>Logs: <code>%APPDATA%\\TextWhisper\\logs\\textwhisper.log</code><br>"
+            "Config: <code>%APPDATA%\\TextWhisper\\config.json</code></small>"
+        )
+        log_path_label.setTextFormat(Qt.TextFormat.RichText)
+        v.addWidget(log_path_label)
         return page
 
     @staticmethod
