@@ -150,3 +150,53 @@ def test_two_utterances_emit_two_segments(tmp_appdata, qapp):
         _emit_block(cap, _silence(0.0))
     qapp.processEvents()
     assert len(segs) == 2
+
+
+def test_speech_started_fires_once_per_onset(tmp_appdata, qapp):
+    """speech_started fires exactly once on each transition silence -> speech."""
+    cap, _ = _make_capture(
+        tmp_appdata,
+        vad_threshold=0.05,
+        vad_silence_ms=90,
+        vad_min_segment_ms=30,
+        vad_preroll_ms=0,
+    )
+    onsets: list[None] = []
+    cap.speech_started.connect(lambda: onsets.append(None))
+
+    # First utterance: silence -> speech transition fires once.
+    for _ in range(3):
+        _emit_block(cap, _silence(0.0))
+    for _ in range(8):
+        _emit_block(cap, _tone(amp=0.3))
+    qapp.processEvents()
+    assert len(onsets) == 1
+
+    # Continued speech does NOT re-fire.
+    for _ in range(8):
+        _emit_block(cap, _tone(amp=0.3))
+    qapp.processEvents()
+    assert len(onsets) == 1
+
+    # Silence then a new utterance -> second onset.
+    for _ in range(6):
+        _emit_block(cap, _silence(0.0))
+    for _ in range(8):
+        _emit_block(cap, _tone(amp=0.3))
+    qapp.processEvents()
+    assert len(onsets) == 2
+
+
+def test_speech_started_not_emitted_on_pure_silence(tmp_appdata, qapp):
+    cap, _ = _make_capture(
+        tmp_appdata,
+        vad_threshold=0.05,
+        vad_silence_ms=90,
+        vad_preroll_ms=0,
+    )
+    onsets: list[None] = []
+    cap.speech_started.connect(lambda: onsets.append(None))
+    for _ in range(20):
+        _emit_block(cap, _silence(0.0))
+    qapp.processEvents()
+    assert onsets == []

@@ -82,6 +82,9 @@ class TextWhisperApp(QObject):
         if bool(self.settings.get("oscilloscope.enabled", True)):
             self.oscilloscope.show()
         self.tray.set_oscilloscope_visible(self.oscilloscope.isVisible())
+        self.tray.set_auto_enter_enabled(
+            bool(self.settings.get("auto_enter_enabled", False))
+        )
 
     # --- lifecycle -----------------------------------------------------
 
@@ -167,6 +170,9 @@ class TextWhisperApp(QObject):
         self.audio.segment_ready.connect(
             self.engine.submit, Qt.ConnectionType.QueuedConnection
         )
+        self.audio.speech_started.connect(
+            self._on_speech_started, Qt.ConnectionType.QueuedConnection
+        )
         self.audio.error.connect(self._on_audio_error)
 
         self.engine.transcription_ready.connect(self._on_transcription)
@@ -177,6 +183,7 @@ class TextWhisperApp(QObject):
         self.tray.toggle_capture.connect(self._toggle_capture)
         self.tray.show_settings.connect(self._open_settings)
         self.tray.toggle_oscilloscope.connect(self._toggle_oscilloscope)
+        self.tray.toggle_auto_enter.connect(self._toggle_auto_enter)
         self.tray.quit_requested.connect(self.quit)
 
     # --- capture control -----------------------------------------------
@@ -232,6 +239,16 @@ class TextWhisperApp(QObject):
             self.settings.set("oscilloscope.enabled", True)
         self.tray.set_oscilloscope_visible(self.oscilloscope.isVisible())
 
+    def _toggle_auto_enter(self) -> None:
+        new_state = not bool(self.settings.get("auto_enter_enabled", False))
+        self.settings.set("auto_enter_enabled", new_state)
+        self.tray.set_auto_enter_enabled(new_state)
+        # If we're turning it OFF mid-pending, stop the live timer too.
+        if not new_state and self._auto_enter_timer.isActive():
+            self._auto_enter_timer.stop()
+            self.hotkey.disarm_cancel()
+        log.info("Auto-Enter %s via tray.", "enabled" if new_state else "disabled")
+
     # --- settings ------------------------------------------------------
 
     def _open_settings(self) -> None:
@@ -268,6 +285,11 @@ class TextWhisperApp(QObject):
         self.oscilloscope.apply_opacity()
         self.oscilloscope.apply_color_settings()
         self.oscilloscope.apply_shape_settings()
+
+        # Tray label for the Auto-Enter toggle reflects whatever was saved.
+        self.tray.set_auto_enter_enabled(
+            bool(self.settings.get("auto_enter_enabled", False))
+        )
 
         if bool(self.settings.get("oscilloscope.enabled", True)):
             if not self.oscilloscope.isVisible():
@@ -420,6 +442,17 @@ class TextWhisperApp(QObject):
         self.hotkey.disarm_cancel()
         self.keyboard_out.send_enter()
         log.info("Auto-Enter fired.")
+
+    def _on_speech_started(self) -> None:
+        """User started a new utterance — cancel any pending auto-Enter.
+
+        The next finished transcription will arm a fresh timer. This stops
+        the timer from firing during a brief pause-then-resume mid-thought.
+        """
+        if self._auto_enter_timer.isActive():
+            self._auto_enter_timer.stop()
+            self.hotkey.disarm_cancel()
+            log.info("Auto-Enter cancelled — new voice input detected.")
 
     def _on_engine_error(self, message: str) -> None:
         self._notify("TextWhisper - Whisper error", message, error=True)

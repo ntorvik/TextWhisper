@@ -329,6 +329,50 @@ def test_auto_enter_timeout_disarms_then_sends_enter(app):
     s.assert_called_once()
 
 
+def test_tray_toggle_auto_enter_flips_setting_and_label(app):
+    """Tray menu item toggles the setting and updates the tray label."""
+    app.settings.set("auto_enter_enabled", False)
+    with patch.object(app.tray, "set_auto_enter_enabled") as set_label:
+        app._toggle_auto_enter()
+    assert app.settings.get("auto_enter_enabled") is True
+    set_label.assert_called_once_with(True)
+
+    with patch.object(app.tray, "set_auto_enter_enabled") as set_label:
+        app._toggle_auto_enter()
+    assert app.settings.get("auto_enter_enabled") is False
+    set_label.assert_called_once_with(False)
+
+
+def test_tray_toggle_auto_enter_off_stops_pending_timer(app):
+    """If a timer was armed, turning Auto-Enter off mid-window kills it."""
+    app.settings.set("auto_enter_enabled", True)
+    app._auto_enter_timer.start(5000)
+    with patch.object(app.hotkey, "disarm_cancel") as d:
+        app._toggle_auto_enter()
+    assert not app._auto_enter_timer.isActive()
+    d.assert_called_once()
+
+
+def test_speech_started_cancels_pending_auto_enter(app):
+    """New utterance during the auto-Enter window must abort the pending Enter.
+
+    The next finished transcription will arm a fresh timer.
+    """
+    app._auto_enter_timer.start(5000)
+    with patch.object(app.hotkey, "disarm_cancel") as d:
+        app._on_speech_started()
+    assert not app._auto_enter_timer.isActive()
+    d.assert_called_once()
+
+
+def test_speech_started_noop_when_no_timer_pending(app):
+    """If no auto-Enter is pending, speech-onset must NOT touch the cancel hook."""
+    assert not app._auto_enter_timer.isActive()
+    with patch.object(app.hotkey, "disarm_cancel") as d:
+        app._on_speech_started()
+    d.assert_not_called()
+
+
 def test_transcription_skips_clipboard_when_disabled(app):
     from PyQt6.QtWidgets import QApplication
 

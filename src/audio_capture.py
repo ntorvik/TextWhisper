@@ -24,6 +24,11 @@ log = logging.getLogger(__name__)
 class AudioCapture(QObject):
     audio_level = pyqtSignal(np.ndarray)
     segment_ready = pyqtSignal(np.ndarray)
+    # Fires the moment the energy-based VAD transitions from "no speech" to
+    # "speech detected." Used by the auto-Enter feature to cancel a pending
+    # Enter as soon as the user starts a new utterance — the next finished
+    # transcription will arm a fresh timer.
+    speech_started = pyqtSignal()
     error = pyqtSignal(str)
 
     SAMPLE_RATE = 16000
@@ -99,6 +104,7 @@ class AudioCapture(QObject):
 
         rms = float(np.sqrt(np.mean(block * block) + 1e-12))
 
+        speech_just_started = False
         with self._lock:
             if rms >= threshold:
                 if not self._has_speech:
@@ -106,6 +112,7 @@ class AudioCapture(QObject):
                     for prev in self._preroll:
                         self._buffer.append(prev)
                         self._buffered_samples += len(prev)
+                    speech_just_started = True
                 self._has_speech = True
                 self._silence_blocks = 0
                 self._buffer.append(block)
@@ -122,6 +129,12 @@ class AudioCapture(QObject):
                         self._emit_locked(min_segment_samples)
                 else:
                     self._preroll.append(block)
+
+        # Emit speech_started OUTSIDE the lock (Qt signal emit can dispatch
+        # synchronously to direct-connected slots, and we don't want to hold
+        # the lock across that).
+        if speech_just_started:
+            self.speech_started.emit()
 
     def _emit_locked(self, min_samples: int) -> None:
         if not self._buffer:

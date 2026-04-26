@@ -38,6 +38,7 @@ class TrayController(QObject):
     toggle_capture = pyqtSignal()
     show_settings = pyqtSignal()
     toggle_oscilloscope = pyqtSignal()
+    toggle_auto_enter = pyqtSignal()
     quit_requested = pyqtSignal()
 
     def __init__(self, parent: QObject | None = None) -> None:
@@ -47,15 +48,19 @@ class TrayController(QObject):
         self.tray.setToolTip("TextWhisper - Idle")
 
         menu = QMenu()
+        # Convention for all toggle items: the menu text says what the NEXT
+        # click will do. No checkmarks (a checkmark plus a "Hide …" label
+        # reads contradictorily).
         self.action_toggle = QAction("Start Capture")
         self.action_oscilloscope = QAction("Show Oscilloscope")
-        self.action_oscilloscope.setCheckable(True)
+        self.action_auto_enter = QAction("Enable Auto-Enter")
         self.action_settings = QAction("Settings...")
         self.action_quit = QAction("Exit")
 
         menu.addAction(self.action_toggle)
         menu.addSeparator()
         menu.addAction(self.action_oscilloscope)
+        menu.addAction(self.action_auto_enter)
         menu.addAction(self.action_settings)
         menu.addSeparator()
         menu.addAction(self.action_quit)
@@ -66,6 +71,7 @@ class TrayController(QObject):
         self.action_toggle.triggered.connect(self.toggle_capture)
         self.action_settings.triggered.connect(self.show_settings)
         self.action_oscilloscope.triggered.connect(self.toggle_oscilloscope)
+        self.action_auto_enter.triggered.connect(self.toggle_auto_enter)
         self.action_quit.triggered.connect(self.quit_requested)
 
         self.tray.activated.connect(self._on_activated)
@@ -84,8 +90,14 @@ class TrayController(QObject):
         self.action_toggle.setText("Stop Capture" if active else "Start Capture")
 
     def set_oscilloscope_visible(self, visible: bool) -> None:
-        self.action_oscilloscope.setChecked(visible)
+        # Same convention as the Start/Stop Capture item: the menu text says
+        # what the NEXT action will do. No check mark.
         self.action_oscilloscope.setText("Hide Oscilloscope" if visible else "Show Oscilloscope")
+
+    def set_auto_enter_enabled(self, enabled: bool) -> None:
+        self.action_auto_enter.setText(
+            "Disable Auto-Enter" if enabled else "Enable Auto-Enter"
+        )
 
     def set_status(self, text: str) -> None:
         self.tray.setToolTip(f"TextWhisper - {text}")
