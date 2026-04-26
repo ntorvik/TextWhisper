@@ -231,7 +231,9 @@ class SettingsDialog(QDialog):
         form = QFormLayout(page)
 
         self.model_combo = QComboBox()
-        self.model_combo.addItems(["tiny", "base", "small", "medium", "large-v3"])
+        self.model_combo.addItems(
+            ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
+        )
         self.model_combo.setCurrentText(str(self.settings.get("model_size", "large-v3")))
         form.addRow("Whisper model:", self.model_combo)
 
