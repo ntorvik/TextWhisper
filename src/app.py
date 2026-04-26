@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import time
 
 from PyQt6.QtCore import QObject, Qt, QTimer
 from PyQt6.QtWidgets import QApplication, QMessageBox
@@ -66,6 +67,16 @@ class TextWhisperApp(QObject):
         self._hotkey_watchdog.setInterval(2000)
         self._hotkey_watchdog.timeout.connect(self._check_hotkey_health)
 
+        # Auto-Enter: timer + state.
+        self._auto_enter_timer = QTimer(self)
+        self._auto_enter_timer.setSingleShot(True)
+        self._auto_enter_timer.timeout.connect(self._on_auto_enter_timeout)
+        # Wall-clock timestamp of the most recent transcription typing —
+        # used to ignore "any key" cancel events caused by our own synthetic
+        # keystrokes echoing back through the listener.
+        self._typing_finished_at = 0.0
+        self._SYNTHETIC_ECHO_GUARD_S = 0.15
+
         self._wire_signals()
 
         if bool(self.settings.get("oscilloscope.enabled", True)):
@@ -120,6 +131,8 @@ class TextWhisperApp(QObject):
     def quit(self) -> None:
         try:
             self._hotkey_watchdog.stop()
+            self._auto_enter_timer.stop()
+            self.hotkey.disarm_cancel()
             if self._is_capturing:
                 self._stop_capture()
             self.hotkey.stop()
@@ -363,6 +376,8 @@ class TextWhisperApp(QObject):
         # New dictation -> reset the hotkey-stray-char counter so subsequent
         # delete presses are scoped to this segment.
         self._extra_chars_typed_by_hotkey = 0
+        # Mark when we finished typing, for the auto-Enter synthetic-echo guard.
+        self._typing_finished_at = time.monotonic()
         log.info(
             "Transcription typed: chars=%d, history_depth=%d",
             typed,
@@ -374,6 +389,37 @@ class TextWhisperApp(QObject):
                 log.info("Copied transcription to clipboard (%d chars).", len(text))
             except Exception:
                 log.exception("Clipboard write failed")
+        # Hands-free auto-Enter: arm a timer and a one-shot any-key cancel.
+        if typed > 0 and bool(self.settings.get("auto_enter_enabled", False)):
+            self._arm_auto_enter()
+
+    # --- auto-Enter ----------------------------------------------------
+
+    def _arm_auto_enter(self) -> None:
+        delay_ms = max(200, int(self.settings.get("auto_enter_delay_ms", 3000)))
+        self._auto_enter_timer.stop()
+        self.hotkey.arm_cancel_on_any_key(self._cancel_auto_enter)
+        self._auto_enter_timer.start(delay_ms)
+        log.info("Auto-Enter armed: pressing Enter in %d ms unless cancelled.", delay_ms)
+
+    def _cancel_auto_enter(self) -> None:
+        # Ignore "cancel" events that fire within the synthetic-echo guard
+        # window — those are almost certainly our own typed keystrokes
+        # bouncing back through the listener. Re-arm so the next genuine
+        # keypress still cancels.
+        if (time.monotonic() - self._typing_finished_at) < self._SYNTHETIC_ECHO_GUARD_S:
+            self.hotkey.arm_cancel_on_any_key(self._cancel_auto_enter)
+            return
+        if self._auto_enter_timer.isActive():
+            self._auto_enter_timer.stop()
+            log.info("Auto-Enter cancelled by user keypress.")
+
+    def _on_auto_enter_timeout(self) -> None:
+        # Disarm cancel BEFORE sending Enter so our own Enter doesn't trip
+        # a subsequent (already disarmed) cancel.
+        self.hotkey.disarm_cancel()
+        self.keyboard_out.send_enter()
+        log.info("Auto-Enter fired.")
 
     def _on_engine_error(self, message: str) -> None:
         self._notify("TextWhisper - Whisper error", message, error=True)

@@ -138,6 +138,16 @@ class KeyboardOutput:
             except Exception:
                 log.exception("delete_word failed")
 
+    def send_enter(self) -> None:
+        """Send a single Enter keystroke (used by the auto-Enter feature)."""
+        with self._lock:
+            try:
+                self._kb.press(Key.enter)
+                self._kb.release(Key.enter)
+                log.info("Sent Enter (auto-Enter).")
+            except Exception:
+                log.exception("send_enter failed")
+
     def delete_chars(self, count: int) -> None:
         if count <= 0:
             return

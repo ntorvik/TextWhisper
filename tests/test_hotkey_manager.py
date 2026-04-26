@@ -169,3 +169,47 @@ def test_reset_state_clears_hotkey_internals(qapp):
         hk.reset_state()
         for hot in hk._hotkeys:
             assert hot._state == set()
+
+
+def test_arm_cancel_fires_once_then_disarms(qapp):
+    """The any-key cancel callback runs exactly once, then auto-disarms."""
+    hk = HotkeyManager({"toggle": "<alt>+z"})
+    captured: dict = {}
+
+    def fake_listener_init(on_press=None, on_release=None):
+        captured["on_press"] = on_press
+        captured["on_release"] = on_release
+        listener = MagicMock()
+        listener.canonical = lambda k: k
+        return listener
+
+    with patch("src.hotkey_manager.Listener", side_effect=fake_listener_init):
+        hk.start()
+        calls = []
+        hk.arm_cancel_on_any_key(lambda: calls.append(None))
+        # Press any key — cb fires.
+        captured["on_press"]("a")
+        assert calls == [None]
+        # Press again — must NOT fire (already disarmed).
+        captured["on_press"]("b")
+        assert calls == [None]
+
+
+def test_disarm_cancel_prevents_callback_firing(qapp):
+    hk = HotkeyManager({"toggle": "<alt>+z"})
+    captured: dict = {}
+
+    def fake_listener_init(on_press=None, on_release=None):
+        captured["on_press"] = on_press
+        captured["on_release"] = on_release
+        listener = MagicMock()
+        listener.canonical = lambda k: k
+        return listener
+
+    with patch("src.hotkey_manager.Listener", side_effect=fake_listener_init):
+        hk.start()
+        calls = []
+        hk.arm_cancel_on_any_key(lambda: calls.append(None))
+        hk.disarm_cancel()
+        captured["on_press"]("a")
+        assert calls == []

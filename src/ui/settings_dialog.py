@@ -235,6 +235,30 @@ class SettingsDialog(QDialog):
         sound_widget.setLayout(sound_row)
         form.addRow("Sound volume:", sound_widget)
 
+        self.auto_enter_check = QCheckBox(
+            "Auto-press Enter after each transcription (hands-free)"
+        )
+        self.auto_enter_check.setChecked(
+            bool(self.settings.get("auto_enter_enabled", False))
+        )
+        self.auto_enter_check.setToolTip(
+            "After your transcription is typed, automatically press Enter "
+            "after the delay below — useful for fully hands-free chat / "
+            "Claude Code workflows.\n\n"
+            "Pressing ANY key during the delay silently cancels that pending "
+            "Enter. The next transcription re-arms it."
+        )
+        form.addRow("Auto-Enter:", self.auto_enter_check)
+
+        self.auto_enter_delay_spin = QSpinBox()
+        self.auto_enter_delay_spin.setRange(200, 30000)
+        self.auto_enter_delay_spin.setSingleStep(250)
+        self.auto_enter_delay_spin.setSuffix(" ms")
+        self.auto_enter_delay_spin.setValue(
+            int(self.settings.get("auto_enter_delay_ms", 3000))
+        )
+        form.addRow("Auto-Enter delay:", self.auto_enter_delay_spin)
+
         self.hotkey_warning = QLabel("")
         self.hotkey_warning.setWordWrap(True)
         self.hotkey_warning.setVisible(False)
@@ -516,6 +540,8 @@ class SettingsDialog(QDialog):
         self.settings.set("play_ready_sound", bool(self.ready_sound_check.isChecked()))
         self.settings.set("play_stop_sound", bool(self.stop_sound_check.isChecked()))
         self.settings.set("sound_volume", round(self.sound_vol_slider.value() / 100.0, 2))
+        self.settings.set("auto_enter_enabled", bool(self.auto_enter_check.isChecked()))
+        self.settings.set("auto_enter_delay_ms", int(self.auto_enter_delay_spin.value()))
         self.settings.set("model_size", self.model_combo.currentText())
         self.settings.set("device", self.device_combo.currentText())
         self.settings.set("compute_type", self.compute_combo.currentText())

@@ -204,6 +204,9 @@ class HotkeyManager(QObject):
         self._mapping: dict[str, str] = {k: str(v) for k, v in mapping.items()}
         self._listener: Listener | None = None
         self._hotkeys: list[HotKey] = []
+        # One-shot "next-keypress" callback used by the auto-Enter feature
+        # to cancel itself silently when the user touches the keyboard.
+        self._cancel_callback = None
 
     @property
     def mapping(self) -> dict[str, str]:
@@ -232,6 +235,14 @@ class HotkeyManager(QObject):
                     k = self._listener.canonical(key)
                     for hk in self._hotkeys:
                         hk.press(k)
+                    # One-shot any-key cancel callback (used by auto-Enter).
+                    cb = self._cancel_callback
+                    if cb is not None:
+                        self._cancel_callback = None
+                        try:
+                            cb()
+                        except Exception:
+                            log.exception("Cancel callback failed")
                 except Exception:
                     log.exception("Hotkey on_press failed for %r", key)
 
@@ -289,6 +300,19 @@ class HotkeyManager(QObject):
             except Exception:
                 log.exception("Could not reset hotkey state for %r", hk)
         log.info("Hotkey state reset (%d hotkeys).", len(self._hotkeys))
+
+    def arm_cancel_on_any_key(self, callback) -> None:
+        """Install a one-shot callback that fires the next time ANY key is pressed.
+
+        After firing, the callback is automatically disarmed; arm again if you
+        want a fresh window. Used by the auto-Enter feature so the user can
+        silently abort the pending Enter by touching any key.
+        """
+        self._cancel_callback = callback
+
+    def disarm_cancel(self) -> None:
+        """Cancel a previously-armed any-key callback without firing it."""
+        self._cancel_callback = None
 
     def _make_emit(self, sig, name: str):
         def cb() -> None:

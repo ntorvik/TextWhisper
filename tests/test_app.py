@@ -255,6 +255,80 @@ def test_stop_capture_plays_stop_sound(app):
         ps.assert_called_once()
 
 
+# --- Auto-Enter ----------------------------------------------------------
+
+def test_auto_enter_disabled_does_not_arm_timer(app):
+    app.settings.set("auto_enter_enabled", False)
+    with patch.object(app.keyboard_out, "type_text", return_value=10), patch.object(
+        app, "_arm_auto_enter"
+    ) as a:
+        app._on_transcription("hello")
+    a.assert_not_called()
+
+
+def test_auto_enter_enabled_arms_timer_after_typing(app):
+    app.settings.set("auto_enter_enabled", True)
+    with patch.object(app.keyboard_out, "type_text", return_value=10), patch.object(
+        app, "_arm_auto_enter"
+    ) as a:
+        app._on_transcription("hello")
+    a.assert_called_once()
+
+
+def test_auto_enter_zero_typed_does_not_arm(app):
+    """Empty / failed transcriptions shouldn't trigger auto-Enter."""
+    app.settings.set("auto_enter_enabled", True)
+    with patch.object(app.keyboard_out, "type_text", return_value=0), patch.object(
+        app, "_arm_auto_enter"
+    ) as a:
+        app._on_transcription("")
+    a.assert_not_called()
+
+
+def test_arm_auto_enter_starts_timer_and_arms_cancel(app):
+    app.settings.set("auto_enter_delay_ms", 1500)
+    with patch.object(app.hotkey, "arm_cancel_on_any_key") as a, patch.object(
+        app._auto_enter_timer, "start"
+    ) as s:
+        app._arm_auto_enter()
+    a.assert_called_once()
+    s.assert_called_once_with(1500)
+
+
+def test_cancel_auto_enter_within_synthetic_window_rearms(app):
+    """A 'cancel' that fires during the echo-guard window must re-arm,
+    not actually cancel — those events are our own typed keystrokes."""
+    import time as time_mod
+
+    app._typing_finished_at = time_mod.monotonic()
+    app._auto_enter_timer.start(5000)
+    with patch.object(app.hotkey, "arm_cancel_on_any_key") as a:
+        app._cancel_auto_enter()
+    a.assert_called_once()
+    assert app._auto_enter_timer.isActive()
+    app._auto_enter_timer.stop()
+
+
+def test_cancel_auto_enter_outside_synthetic_window_stops_timer(app):
+    app._typing_finished_at = 0.0  # long ago
+    app._auto_enter_timer.start(5000)
+    with patch.object(app.hotkey, "arm_cancel_on_any_key") as a:
+        app._cancel_auto_enter()
+    a.assert_not_called()
+    assert not app._auto_enter_timer.isActive()
+
+
+def test_auto_enter_timeout_disarms_then_sends_enter(app):
+    """Timer fires -> disarm cancel BEFORE Enter so synthetic Enter doesn't loop."""
+    with patch.object(app.hotkey, "disarm_cancel") as d, patch.object(
+        app.keyboard_out, "send_enter"
+    ) as s:
+        app._on_auto_enter_timeout()
+    # disarm must happen before send_enter.
+    d.assert_called_once()
+    s.assert_called_once()
+
+
 def test_transcription_skips_clipboard_when_disabled(app):
     from PyQt6.QtWidgets import QApplication
 

@@ -15,6 +15,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "play_ready_sound": True,
     "play_stop_sound": False,
     "sound_volume": 0.15,
+    # Auto-Enter: after a transcription is typed, optionally press Enter for
+    # you N ms later — useful for hands-free Claude Code / chat workflows.
+    # Cancelled silently if you press ANY key during the window.
+    "auto_enter_enabled": False,
+    "auto_enter_delay_ms": 3000,
     "model_size": "large-v3",
     "compute_type": "float16",
     "device": "cuda",

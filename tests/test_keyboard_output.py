@@ -205,3 +205,14 @@ def test_delete_chars_failure_swallowed(tmp_appdata):
     kb, mock = _kb(tmp_appdata, type_delay_ms=0)
     mock.press.side_effect = RuntimeError("focus failed")
     kb.delete_chars(3)  # should not raise
+
+
+def test_send_enter_sends_enter_keystroke(tmp_appdata):
+    from pynput.keyboard import Key
+
+    kb, mock = _kb(tmp_appdata)
+    kb.send_enter()
+    presses = [c.args[0] for c in mock.press.call_args_list]
+    releases = [c.args[0] for c in mock.release.call_args_list]
+    assert Key.enter in presses
+    assert Key.enter in releases
