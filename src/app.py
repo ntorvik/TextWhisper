@@ -14,11 +14,13 @@ from .hotkey_manager import HotkeyManager, chars_inserted_per_press
 from .keyboard_output import KeyboardOutput
 from .settings_manager import SettingsManager
 from .sound_player import SoundPlayer
+from .summarizer import Summarizer
 from .transcription import TranscriptionEngine
 from .ui.oscilloscope import OscilloscopeWidget
 from .ui.settings_dialog import SettingsDialog
 from .ui.tray import TrayController
 from .voice import TTSService
+from .voice_server import VoiceIPCServer
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +41,8 @@ class TextWhisperApp(QObject):
         self.tray = TrayController(parent=self)
         self.oscilloscope = OscilloscopeWidget(self.settings)
         self.tts = TTSService(self.settings)
+        self.summarizer = Summarizer(self.settings)
+        self.voice_ipc = VoiceIPCServer(self.settings, self.tts, self.summarizer)
 
         self._is_capturing = False
         self._model_loaded = False
@@ -106,6 +110,11 @@ class TextWhisperApp(QObject):
         self.engine.start()
         self.hotkey.start()
         self._hotkey_watchdog.start()
+        # Voice IPC only listens when the user has actually opted into
+        # read-back. The setting is re-checked in /speak too, so even a
+        # stale port stays harmless.
+        if bool(self.settings.get("voice_enabled", False)):
+            self.voice_ipc.start()
         first_run = self._is_first_run()
         if first_run:
             QMessageBox.information(
@@ -154,6 +163,7 @@ class TextWhisperApp(QObject):
                 self._stop_capture()
             self.hotkey.stop()
             self.engine.stop()
+            self.voice_ipc.stop()
             self.tts.shutdown()
         finally:
             self.qapp.quit()
@@ -324,6 +334,14 @@ class TextWhisperApp(QObject):
         elif self.oscilloscope.isVisible():
             self.oscilloscope.hide()
         self.tray.set_oscilloscope_visible(self.oscilloscope.isVisible())
+
+        # Voice IPC tracks the read-back enable flag — bring it up if it
+        # was just enabled, take it down if it was just disabled.
+        voice_on = bool(self.settings.get("voice_enabled", False))
+        if voice_on and not self.voice_ipc.is_running:
+            self.voice_ipc.start()
+        elif not voice_on and self.voice_ipc.is_running:
+            self.voice_ipc.stop()
 
     def _reload_engine(self) -> None:
         with contextlib.suppress(TypeError, RuntimeError):
