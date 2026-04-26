@@ -78,10 +78,38 @@ class TextWhisperApp(QObject):
         self.engine.start()
         self.hotkey.start()
         self._hotkey_watchdog.start()
+        first_run = self._is_first_run()
+        if first_run:
+            QMessageBox.information(
+                None,
+                "TextWhisper — First-time setup",
+                "Welcome to TextWhisper.\n\n"
+                "On first launch the Whisper speech-recognition model is "
+                "downloaded automatically (~1.5 GB for the default 'large-v3' "
+                "model). This is a one-time download — subsequent launches "
+                "load in seconds.\n\n"
+                "The download happens in the background after you click OK. "
+                "The microphone tray icon will turn its 'Ready' colour and a "
+                "soft chime will play when the model has finished loading and "
+                "TextWhisper is ready to use.",
+            )
         self._notify(
             "TextWhisper",
             f"Press {self.settings.get('hotkey')} to dictate. Loading Whisper model...",
         )
+
+    def _is_first_run(self) -> bool:
+        """True iff this is the first time TextWhisper has launched on this machine.
+
+        Marker file lives in the same directory as ``config.json``.
+        """
+        cfg_path = self.settings.config_path
+        marker = cfg_path.parent / ".welcome_shown"
+        if marker.exists():
+            return False
+        with contextlib.suppress(OSError):
+            marker.write_text("ok", encoding="utf-8")
+        return True
 
     def _notify(self, title: str, message: str, *, error: bool = False) -> None:
         """Tray balloon, suppressed when ``notifications_enabled`` is False."""
