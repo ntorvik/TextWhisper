@@ -200,3 +200,107 @@ def test_speech_started_not_emitted_on_pure_silence(tmp_appdata, qapp):
         _emit_block(cap, _silence(0.0))
     qapp.processEvents()
     assert onsets == []
+
+
+def test_speech_ended_fires_on_silence_after_speech(tmp_appdata, qapp):
+    """speech_ended fires once the silence threshold is reached after speech."""
+    cap, _ = _make_capture(
+        tmp_appdata,
+        vad_threshold=0.05,
+        vad_silence_ms=90,
+        vad_min_segment_ms=30,
+        vad_preroll_ms=0,
+    )
+    ends: list[None] = []
+    cap.speech_ended.connect(lambda: ends.append(None))
+
+    for _ in range(8):
+        _emit_block(cap, _tone(amp=0.3))
+    assert ends == []  # still mid-speech
+
+    for _ in range(6):
+        _emit_block(cap, _silence(0.0))
+    qapp.processEvents()
+    assert len(ends) == 1
+
+
+def test_speech_ended_fires_even_when_segment_dropped(tmp_appdata, qapp):
+    """A speech-burst too short to meet vad_min_segment_ms still ends in
+    silence — speech_ended must fire so the auto-Enter listener can clear
+    its 'user is speaking' flag even when no transcription will follow."""
+    cap, segs = _make_capture(
+        tmp_appdata,
+        vad_threshold=0.05,
+        vad_silence_ms=60,
+        vad_min_segment_ms=300,
+        vad_preroll_ms=0,
+    )
+    ends: list[None] = []
+    cap.speech_ended.connect(lambda: ends.append(None))
+
+    _emit_block(cap, _tone(amp=0.3))  # ~30 ms blip < 300 ms minimum
+    for _ in range(6):
+        _emit_block(cap, _silence(0.0))
+    qapp.processEvents()
+    assert segs == []
+    assert len(ends) == 1
+
+
+def test_speech_ended_not_emitted_on_max_segment_chunking(tmp_appdata, qapp):
+    """Max-segment forced flush is mid-speech chunking — user is still
+    talking, so speech_ended must NOT fire there."""
+    cap, _ = _make_capture(
+        tmp_appdata,
+        vad_threshold=0.05,
+        vad_silence_ms=10000,
+        vad_max_segment_ms=300,
+        vad_min_segment_ms=30,
+        vad_preroll_ms=0,
+    )
+    ends: list[None] = []
+    cap.speech_ended.connect(lambda: ends.append(None))
+    blocks_for_300ms = (300 * SR // 1000) // BS + 2
+    for _ in range(blocks_for_300ms):
+        _emit_block(cap, _tone(amp=0.3))
+    qapp.processEvents()
+    assert ends == []
+
+
+def test_speech_ended_not_emitted_on_pure_silence(tmp_appdata, qapp):
+    """Without any speech, silence shouldn't emit speech_ended."""
+    cap, _ = _make_capture(
+        tmp_appdata,
+        vad_threshold=0.05,
+        vad_silence_ms=90,
+        vad_preroll_ms=0,
+    )
+    ends: list[None] = []
+    cap.speech_ended.connect(lambda: ends.append(None))
+    for _ in range(20):
+        _emit_block(cap, _silence(0.0))
+    qapp.processEvents()
+    assert ends == []
+
+
+def test_speech_ended_fires_once_per_utterance(tmp_appdata, qapp):
+    """Two utterances → two speech_ended events."""
+    cap, _ = _make_capture(
+        tmp_appdata,
+        vad_threshold=0.05,
+        vad_silence_ms=90,
+        vad_min_segment_ms=30,
+        vad_preroll_ms=0,
+    )
+    ends: list[None] = []
+    cap.speech_ended.connect(lambda: ends.append(None))
+
+    for _ in range(8):
+        _emit_block(cap, _tone(amp=0.3))
+    for _ in range(6):
+        _emit_block(cap, _silence(0.0))
+    for _ in range(8):
+        _emit_block(cap, _tone(amp=0.3))
+    for _ in range(6):
+        _emit_block(cap, _silence(0.0))
+    qapp.processEvents()
+    assert len(ends) == 2

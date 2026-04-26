@@ -76,6 +76,12 @@ class TextWhisperApp(QObject):
         # keystrokes echoing back through the listener.
         self._typing_finished_at = 0.0
         self._SYNTHETIC_ECHO_GUARD_S = 0.15
+        # True between an audio.speech_started and the next audio.speech_ended.
+        # If a transcription completes while this is True, the user resumed
+        # talking during transcription latency — defer arming the auto-Enter
+        # timer until they actually fall silent again (the next transcription
+        # cycle will arm it).
+        self._user_is_speaking = False
 
         self._wire_signals()
 
@@ -173,6 +179,9 @@ class TextWhisperApp(QObject):
         self.audio.speech_started.connect(
             self._on_speech_started, Qt.ConnectionType.QueuedConnection
         )
+        self.audio.speech_ended.connect(
+            self._on_speech_ended, Qt.ConnectionType.QueuedConnection
+        )
         self.audio.error.connect(self._on_audio_error)
 
         self.engine.transcription_ready.connect(self._on_transcription)
@@ -223,6 +232,12 @@ class TextWhisperApp(QObject):
     def _stop_capture(self) -> None:
         self.audio.stop()
         self._is_capturing = False
+        # Capture is off — user is no longer "speaking" from this app's POV,
+        # even if AudioCapture was force-flushed mid-utterance and never
+        # emitted speech_ended. Without this reset, an in-flight transcription
+        # arriving after stop would be treated as "still speaking" and skip
+        # arming auto-Enter.
+        self._user_is_speaking = False
         self.tray.set_active(False)
         self.oscilloscope.set_active(False)
         self.oscilloscope.clear()
@@ -412,8 +427,18 @@ class TextWhisperApp(QObject):
             except Exception:
                 log.exception("Clipboard write failed")
         # Hands-free auto-Enter: arm a timer and a one-shot any-key cancel.
+        # If the user resumed speaking while Whisper was transcribing this
+        # segment, defer — the next transcription cycle (after they actually
+        # fall silent again) will arm the timer instead. Otherwise the 3 s
+        # window would tick down DURING the user's continued speech.
         if typed > 0 and bool(self.settings.get("auto_enter_enabled", False)):
-            self._arm_auto_enter()
+            if self._user_is_speaking:
+                log.info(
+                    "Auto-Enter NOT armed — user resumed speaking during "
+                    "transcription; deferring until they fall silent again."
+                )
+            else:
+                self._arm_auto_enter()
 
     # --- auto-Enter ----------------------------------------------------
 
@@ -448,11 +473,24 @@ class TextWhisperApp(QObject):
 
         The next finished transcription will arm a fresh timer. This stops
         the timer from firing during a brief pause-then-resume mid-thought.
+
+        Also flips :attr:`_user_is_speaking` so that if Whisper finishes the
+        previous segment while the user is mid-utterance, ``_on_transcription``
+        will defer arming the timer instead of starting it during speech.
         """
+        self._user_is_speaking = True
         if self._auto_enter_timer.isActive():
             self._auto_enter_timer.stop()
             self.hotkey.disarm_cancel()
             log.info("Auto-Enter cancelled — new voice input detected.")
+
+    def _on_speech_ended(self) -> None:
+        """Sustained silence after speech — user has actually stopped talking.
+
+        Clears the speaking flag so the next finished transcription is allowed
+        to arm the auto-Enter timer.
+        """
+        self._user_is_speaking = False
 
     def _on_engine_error(self, message: str) -> None:
         self._notify("TextWhisper - Whisper error", message, error=True)

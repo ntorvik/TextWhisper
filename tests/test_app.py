@@ -373,6 +373,85 @@ def test_speech_started_noop_when_no_timer_pending(app):
     d.assert_not_called()
 
 
+def test_speech_started_marks_user_is_speaking(app):
+    """speech_started must flip the speaking flag so a transcription that
+    arrives mid-utterance defers arming the auto-Enter timer."""
+    assert app._user_is_speaking is False
+    app._on_speech_started()
+    assert app._user_is_speaking is True
+
+
+def test_speech_ended_clears_user_is_speaking(app):
+    """speech_ended is the silence-after-speech boundary — flag goes False."""
+    app._user_is_speaking = True
+    app._on_speech_ended()
+    assert app._user_is_speaking is False
+
+
+def test_transcription_during_active_speech_defers_arming(app):
+    """Bug fix: if user resumed speaking while Whisper was transcribing the
+    previous segment, _on_transcription must NOT arm the timer — otherwise
+    the 3 s window ticks down DURING the user's continued speech and Enter
+    fires mid-thought.
+    """
+    app.settings.set("auto_enter_enabled", True)
+    app._user_is_speaking = True  # user resumed talking during transcription
+    with patch.object(app.keyboard_out, "type_text", return_value=10), patch.object(
+        app, "_arm_auto_enter"
+    ) as a:
+        app._on_transcription("hello")
+    a.assert_not_called()
+
+
+def test_transcription_after_silence_arms_normally(app):
+    """If user has actually fallen silent (speech_ended was observed) before
+    the transcription returns, the timer arms normally."""
+    app.settings.set("auto_enter_enabled", True)
+    app._user_is_speaking = False
+    with patch.object(app.keyboard_out, "type_text", return_value=10), patch.object(
+        app, "_arm_auto_enter"
+    ) as a:
+        app._on_transcription("hello")
+    a.assert_called_once()
+
+
+def test_resume_then_silence_then_transcription_arms(app):
+    """Full repro of the bug scenario: resume during transcription #1 keeps
+    the timer disarmed, but once the user falls silent again and
+    transcription #2 arrives, that one DOES arm."""
+    app.settings.set("auto_enter_enabled", True)
+
+    # Transcription #1 lands while user is mid-resumed-speech.
+    app._on_speech_started()
+    assert app._user_is_speaking is True
+    with patch.object(app.keyboard_out, "type_text", return_value=10), patch.object(
+        app, "_arm_auto_enter"
+    ) as a1:
+        app._on_transcription("first part")
+    a1.assert_not_called()
+
+    # User finishes resumed utterance — silence detected.
+    app._on_speech_ended()
+    assert app._user_is_speaking is False
+
+    # Transcription #2 lands after the user has fallen silent.
+    with patch.object(app.keyboard_out, "type_text", return_value=10), patch.object(
+        app, "_arm_auto_enter"
+    ) as a2:
+        app._on_transcription("second part")
+    a2.assert_called_once()
+
+
+def test_stop_capture_resets_user_is_speaking(app):
+    """Manual stop mid-utterance must clear the speaking flag — otherwise an
+    in-flight transcription arriving after stop would be skipped forever."""
+    app._is_capturing = True
+    app._user_is_speaking = True
+    with patch.object(app.audio, "stop"), patch.object(app.sound_player, "play_stop"):
+        app._stop_capture()
+    assert app._user_is_speaking is False
+
+
 def test_transcription_skips_clipboard_when_disabled(app):
     from PyQt6.QtWidgets import QApplication
 

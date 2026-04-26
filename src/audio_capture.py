@@ -29,6 +29,12 @@ class AudioCapture(QObject):
     # Enter as soon as the user starts a new utterance — the next finished
     # transcription will arm a fresh timer.
     speech_started = pyqtSignal()
+    # Fires when sustained silence is detected after speech (the same boundary
+    # that triggers segment emission). Always fires on that boundary, even if
+    # the buffered audio was dropped for being shorter than vad_min_segment_ms.
+    # Listeners (auto-Enter) use this to know the user has actually stopped
+    # talking — independently of whether a transcription will follow.
+    speech_ended = pyqtSignal()
     error = pyqtSignal(str)
 
     SAMPLE_RATE = 16000
@@ -105,6 +111,7 @@ class AudioCapture(QObject):
         rms = float(np.sqrt(np.mean(block * block) + 1e-12))
 
         speech_just_started = False
+        speech_just_ended = False
         with self._lock:
             if rms >= threshold:
                 if not self._has_speech:
@@ -118,6 +125,8 @@ class AudioCapture(QObject):
                 self._buffer.append(block)
                 self._buffered_samples += len(block)
                 if self._buffered_samples >= max_segment_samples:
+                    # Max-segment chunking — the user is still talking, so
+                    # this is NOT a speech-ended boundary.
                     self._emit_locked(min_segment_samples)
             else:
                 if self._has_speech:
@@ -127,14 +136,17 @@ class AudioCapture(QObject):
                     self._silence_blocks += 1
                     if self._silence_blocks >= silence_blocks_max:
                         self._emit_locked(min_segment_samples)
+                        speech_just_ended = True
                 else:
                     self._preroll.append(block)
 
-        # Emit speech_started OUTSIDE the lock (Qt signal emit can dispatch
+        # Emit signals OUTSIDE the lock (Qt signal emit can dispatch
         # synchronously to direct-connected slots, and we don't want to hold
         # the lock across that).
         if speech_just_started:
             self.speech_started.emit()
+        if speech_just_ended:
+            self.speech_ended.emit()
 
     def _emit_locked(self, min_samples: int) -> None:
         if not self._buffer:
