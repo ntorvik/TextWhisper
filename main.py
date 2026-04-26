@@ -6,8 +6,24 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 
+def _resolve_log_dir() -> Path:
+    """Pick a stable, user-visible log location regardless of how the app launched.
+
+    Always writes to the same place:
+      Windows  -> %APPDATA%\\TextWhisper\\logs\\
+      Linux/Mac -> ~/.config/TextWhisper/logs/
+
+    Same parent directory as ``config.json``, so users have one obvious folder
+    to look at. Survives PyInstaller rebuilds (the bundle's _internal/ tree is
+    no longer the log destination).
+    """
+    base = os.environ.get("APPDATA")
+    root = Path(base) if base else Path.home() / ".config"
+    return root / "TextWhisper" / "logs"
+
+
 def _setup_logging() -> Path:
-    log_dir = Path(__file__).resolve().parent / "logs"
+    log_dir = _resolve_log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / "textwhisper.log"
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -16,8 +32,8 @@ def _setup_logging() -> Path:
     root = logging.getLogger()
     root.setLevel(logging.INFO)
     root.addHandler(handler)
-    # pythonw.exe has no stdout (sys.stdout is None) — only attach a stream
-    # handler when running from a real console.
+    # pythonw.exe (and the PyInstaller GUI build) have no stdout — only attach
+    # a stream handler when running from a real console.
     if sys.stdout is not None and getattr(sys.stdout, "fileno", None):
         try:
             sys.stdout.fileno()

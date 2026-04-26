@@ -109,7 +109,7 @@ The first launch downloads the Whisper model (~1.5 GB for `large-v3`) into the H
 
 ### Lifecycle
 - **Single-instance lock** — clicking the launcher twice just brings up "TextWhisper is already running" instead of stacking processes.
-- **Crash logger** at `logs/textwhisper.log` (rotated, 1 MB × 3) — every transcription, every hotkey event, every keyboard injection result, plus full tracebacks on errors.
+- **Crash logger** at `%APPDATA%\TextWhisper\logs\textwhisper.log` (Windows) or `~/.config/TextWhisper/logs/textwhisper.log` (Linux/macOS), rotated at 1 MB × 3 — every transcription, every hotkey event, every keyboard injection result, plus full tracebacks on errors.
 
 ### Persistence
 Config lives at:
