@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSlider,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -139,10 +140,52 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.settings = settings
         self.setWindowTitle("TextWhisper Settings")
-        self.setMinimumWidth(460)
+        self.setMinimumWidth(520)
         self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
 
-        form = QFormLayout()
+        self.tabs = QTabWidget(self)
+        self.tabs.addTab(self._build_hotkeys_tab(), "Hotkeys")
+        self.tabs.addTab(self._build_speech_tab(), "Speech")
+        self.tabs.addTab(self._build_output_tab(), "Output")
+        self.tabs.addTab(self._build_feedback_tab(), "Feedback")
+        self.tabs.addTab(self._build_oscilloscope_tab(), "Oscilloscope")
+
+        info = QLabel(
+            "Note: changing model or device reloads Whisper in the background. "
+            "Hotkey and microphone changes apply on save."
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("color: #888;")
+
+        save_btn = QPushButton("Save")
+        cancel_btn = QPushButton("Cancel")
+        save_btn.setDefault(True)
+        save_btn.clicked.connect(self._save)
+        cancel_btn.clicked.connect(self.reject)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        btn_row.addWidget(save_btn)
+        btn_row.addWidget(cancel_btn)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.tabs)
+        layout.addSpacing(4)
+        layout.addWidget(info)
+        layout.addSpacing(4)
+        layout.addLayout(btn_row)
+
+        # Hotkey live-validation must run after both line edits exist.
+        self.hotkey_edit.textChanged.connect(self._refresh_hotkey_warning)
+        self.delete_hotkey_edit.textChanged.connect(self._refresh_hotkey_warning)
+        self._refresh_hotkey_warning()
+
+    # -------------------------------------------------------------------
+    # Tabs
+    # -------------------------------------------------------------------
+
+    def _build_hotkeys_tab(self) -> QWidget:
+        page = QWidget()
+        form = QFormLayout(page)
 
         self.hotkey_edit = QLineEdit(str(self.settings.get("hotkey", "<alt>+z")))
         self.hotkey_edit.setPlaceholderText("<alt>+z")
@@ -152,30 +195,18 @@ class SettingsDialog(QDialog):
         )
         record_hotkey_btn = QPushButton("Record...")
         record_hotkey_btn.clicked.connect(lambda: self._record_into(self.hotkey_edit))
-        hotkey_row = QHBoxLayout()
-        hotkey_row.setContentsMargins(0, 0, 0, 0)
-        hotkey_row.addWidget(self.hotkey_edit, 1)
-        hotkey_row.addWidget(record_hotkey_btn)
-        hotkey_widget = QWidget()
-        hotkey_widget.setLayout(hotkey_row)
-        form.addRow("Dictation hotkey:", hotkey_widget)
+        form.addRow("Dictation hotkey:", self._row(self.hotkey_edit, record_hotkey_btn))
 
         self.delete_hotkey_edit = QLineEdit(str(self.settings.get("delete_hotkey", "<delete>")))
         self.delete_hotkey_edit.setPlaceholderText("<delete>")
         self.delete_hotkey_edit.setToolTip(
             "Single tap = delete previous word.  Double tap = delete the entire last "
-            "transcription.  Note: a bare modifier-less key like <delete> will conflict "
+            "transcription.  A bare modifier-less key like <delete> will conflict "
             "with that key's normal function — prefer e.g. <ctrl>+<backspace> if so."
         )
         record_delete_btn = QPushButton("Record...")
         record_delete_btn.clicked.connect(lambda: self._record_into(self.delete_hotkey_edit))
-        del_row = QHBoxLayout()
-        del_row.setContentsMargins(0, 0, 0, 0)
-        del_row.addWidget(self.delete_hotkey_edit, 1)
-        del_row.addWidget(record_delete_btn)
-        del_widget = QWidget()
-        del_widget.setLayout(del_row)
-        form.addRow("Delete-word hotkey:", del_widget)
+        form.addRow("Delete-word hotkey:", self._row(self.delete_hotkey_edit, record_delete_btn))
 
         self.double_tap_spin = QSpinBox()
         self.double_tap_spin.setRange(100, 1000)
@@ -187,85 +218,15 @@ class SettingsDialog(QDialog):
         )
         form.addRow("Double-tap window:", self.double_tap_spin)
 
-        self.clipboard_check = QCheckBox("Copy each transcription to the clipboard")
-        self.clipboard_check.setChecked(bool(self.settings.get("clipboard_enabled", True)))
-        self.clipboard_check.setToolTip(
-            "If your focus isn't on a text field, you can paste the missed dictation "
-            "with Ctrl+V."
-        )
-        form.addRow("Clipboard:", self.clipboard_check)
-
-        self.notifications_check = QCheckBox("Show tray pop-up notifications")
-        self.notifications_check.setChecked(
-            bool(self.settings.get("notifications_enabled", True))
-        )
-        self.notifications_check.setToolTip(
-            "When off, no balloon toasts are shown — startup, ready, or error messages "
-            "still go to logs/textwhisper.log and the tray icon tooltip."
-        )
-        form.addRow("Notifications:", self.notifications_check)
-
-        self.ready_sound_check = QCheckBox("Play soft chime when capture is ready")
-        self.ready_sound_check.setChecked(bool(self.settings.get("play_ready_sound", True)))
-        self.ready_sound_check.setToolTip(
-            "A short two-note ascending chime plays after pressing the dictation "
-            "hotkey, BEFORE the microphone opens — so the mic doesn't pick up the tone."
-        )
-        form.addRow("Ready sound:", self.ready_sound_check)
-
-        self.stop_sound_check = QCheckBox("Play soft chime when capture stops")
-        self.stop_sound_check.setChecked(bool(self.settings.get("play_stop_sound", False)))
-        form.addRow("Stop sound:", self.stop_sound_check)
-
-        self.sound_vol_slider = QSlider(Qt.Orientation.Horizontal)
-        self.sound_vol_slider.setRange(0, 100)
-        self.sound_vol_slider.setSingleStep(5)
-        self.sound_vol_slider.setValue(
-            int(round(float(self.settings.get("sound_volume", 0.15)) * 100))
-        )
-        self.sound_vol_value = QLabel(f"{self.sound_vol_slider.value()}%")
-        self.sound_vol_slider.valueChanged.connect(
-            lambda v: self.sound_vol_value.setText(f"{v}%")
-        )
-        sound_row = QHBoxLayout()
-        sound_row.addWidget(self.sound_vol_slider, 1)
-        sound_row.addWidget(self.sound_vol_value)
-        sound_row.setContentsMargins(0, 0, 0, 0)
-        sound_widget = QWidget()
-        sound_widget.setLayout(sound_row)
-        form.addRow("Sound volume:", sound_widget)
-
-        self.auto_enter_check = QCheckBox(
-            "Auto-press Enter after each transcription (hands-free)"
-        )
-        self.auto_enter_check.setChecked(
-            bool(self.settings.get("auto_enter_enabled", False))
-        )
-        self.auto_enter_check.setToolTip(
-            "After your transcription is typed, automatically press Enter "
-            "after the delay below — useful for fully hands-free chat / "
-            "Claude Code workflows.\n\n"
-            "Pressing ANY key during the delay silently cancels that pending "
-            "Enter. The next transcription re-arms it."
-        )
-        form.addRow("Auto-Enter:", self.auto_enter_check)
-
-        self.auto_enter_delay_spin = QSpinBox()
-        self.auto_enter_delay_spin.setRange(200, 30000)
-        self.auto_enter_delay_spin.setSingleStep(250)
-        self.auto_enter_delay_spin.setSuffix(" ms")
-        self.auto_enter_delay_spin.setValue(
-            int(self.settings.get("auto_enter_delay_ms", 3000))
-        )
-        form.addRow("Auto-Enter delay:", self.auto_enter_delay_spin)
-
         self.hotkey_warning = QLabel("")
         self.hotkey_warning.setWordWrap(True)
         self.hotkey_warning.setVisible(False)
         form.addRow("", self.hotkey_warning)
-        self.hotkey_edit.textChanged.connect(self._refresh_hotkey_warning)
-        self.delete_hotkey_edit.textChanged.connect(self._refresh_hotkey_warning)
-        self._refresh_hotkey_warning()
+        return page
+
+    def _build_speech_tab(self) -> QWidget:
+        page = QWidget()
+        form = QFormLayout(page)
 
         self.model_combo = QComboBox()
         self.model_combo.addItems(["tiny", "base", "small", "medium", "large-v3"])
@@ -285,9 +246,9 @@ class SettingsDialog(QDialog):
         self.mic_combo = QComboBox()
         self.mic_combo.addItem("System default", None)
         try:
-            for idx, info in enumerate(sd.query_devices()):
-                if int(info.get("max_input_channels", 0)) > 0:
-                    self.mic_combo.addItem(f"{idx}: {info['name']}", idx)
+            for idx, dev in enumerate(sd.query_devices()):
+                if int(dev.get("max_input_channels", 0)) > 0:
+                    self.mic_combo.addItem(f"{idx}: {dev['name']}", idx)
         except Exception as e:
             self.mic_combo.addItem(f"(error listing devices: {e})", None)
         current_mic = self.settings.get("microphone_device")
@@ -316,12 +277,11 @@ class SettingsDialog(QDialog):
         self.thresh_spin.setDecimals(3)
         self.thresh_spin.setValue(float(self.settings.get("vad_threshold", 0.012)))
         form.addRow("Voice threshold (RMS):", self.thresh_spin)
+        return page
 
-        self.delay_spin = QSpinBox()
-        self.delay_spin.setRange(0, 50)
-        self.delay_spin.setSuffix(" ms")
-        self.delay_spin.setValue(int(self.settings.get("type_delay_ms", 4)))
-        form.addRow("Per-character type delay:", self.delay_spin)
+    def _build_output_tab(self) -> QWidget:
+        page = QWidget()
+        form = QFormLayout(page)
 
         self.output_method_combo = QComboBox()
         self.output_method_combo.addItem("Type (char-by-char keystrokes)", "type")
@@ -339,20 +299,91 @@ class SettingsDialog(QDialog):
         )
         form.addRow("Output method:", self.output_method_combo)
 
+        self.delay_spin = QSpinBox()
+        self.delay_spin.setRange(0, 50)
+        self.delay_spin.setSuffix(" ms")
+        self.delay_spin.setValue(int(self.settings.get("type_delay_ms", 4)))
+        form.addRow("Per-character type delay:", self.delay_spin)
+
+        self.auto_enter_check = QCheckBox(
+            "Auto-press Enter after each transcription (hands-free)"
+        )
+        self.auto_enter_check.setChecked(
+            bool(self.settings.get("auto_enter_enabled", False))
+        )
+        self.auto_enter_check.setToolTip(
+            "After your transcription is typed, automatically press Enter "
+            "after the delay below — useful for fully hands-free chat / "
+            "Claude Code workflows.\n\n"
+            "Pressing ANY key during the delay silently cancels that pending "
+            "Enter. The next transcription re-arms it."
+        )
+        form.addRow("Auto-Enter:", self.auto_enter_check)
+
+        self.auto_enter_delay_spin = QSpinBox()
+        self.auto_enter_delay_spin.setRange(200, 30000)
+        self.auto_enter_delay_spin.setSingleStep(250)
+        self.auto_enter_delay_spin.setSuffix(" ms")
+        self.auto_enter_delay_spin.setValue(
+            int(self.settings.get("auto_enter_delay_ms", 3000))
+        )
+        form.addRow("Auto-Enter delay:", self.auto_enter_delay_spin)
+        return page
+
+    def _build_feedback_tab(self) -> QWidget:
+        page = QWidget()
+        form = QFormLayout(page)
+
+        self.notifications_check = QCheckBox("Show tray pop-up notifications")
+        self.notifications_check.setChecked(
+            bool(self.settings.get("notifications_enabled", True))
+        )
+        self.notifications_check.setToolTip(
+            "When off, no balloon toasts are shown — startup, ready, or error messages "
+            "still go to logs/textwhisper.log and the tray icon tooltip."
+        )
+        form.addRow("Notifications:", self.notifications_check)
+
+        self.clipboard_check = QCheckBox("Copy each transcription to the clipboard")
+        self.clipboard_check.setChecked(bool(self.settings.get("clipboard_enabled", True)))
+        self.clipboard_check.setToolTip(
+            "If your focus isn't on a text field, you can paste the missed dictation "
+            "with Ctrl+V."
+        )
+        form.addRow("Clipboard:", self.clipboard_check)
+
+        self.ready_sound_check = QCheckBox("Play soft chime when capture is ready")
+        self.ready_sound_check.setChecked(bool(self.settings.get("play_ready_sound", True)))
+        self.ready_sound_check.setToolTip(
+            "A short two-note ascending chime plays after pressing the dictation "
+            "hotkey, BEFORE the microphone opens — so the mic doesn't pick up the tone."
+        )
+        form.addRow("Ready sound:", self.ready_sound_check)
+
+        self.stop_sound_check = QCheckBox("Play soft chime when capture stops")
+        self.stop_sound_check.setChecked(bool(self.settings.get("play_stop_sound", False)))
+        form.addRow("Stop sound:", self.stop_sound_check)
+
+        self.sound_vol_slider = QSlider(Qt.Orientation.Horizontal)
+        self.sound_vol_slider.setRange(0, 100)
+        self.sound_vol_slider.setSingleStep(5)
+        self.sound_vol_slider.setValue(
+            int(round(float(self.settings.get("sound_volume", 0.15)) * 100))
+        )
+        self.sound_vol_value = QLabel(f"{self.sound_vol_slider.value()}%")
+        self.sound_vol_slider.valueChanged.connect(
+            lambda v: self.sound_vol_value.setText(f"{v}%")
+        )
+        form.addRow("Sound volume:", self._row(self.sound_vol_slider, self.sound_vol_value))
+        return page
+
+    def _build_oscilloscope_tab(self) -> QWidget:
+        page = QWidget()
+        form = QFormLayout(page)
+
         self.osc_check = QCheckBox("Show oscilloscope")
         self.osc_check.setChecked(bool(self.settings.get("oscilloscope.enabled", True)))
         form.addRow("Oscilloscope:", self.osc_check)
-
-        self.shape_combo = QComboBox()
-        self.shape_combo.addItem("Rounded rectangle", "rounded")
-        self.shape_combo.addItem("Pill", "pill")
-        self.shape_combo.addItem("Sharp rectangle", "rect")
-        current_shape = str(self.settings.get("oscilloscope.shape", "rounded"))
-        for i in range(self.shape_combo.count()):
-            if self.shape_combo.itemData(i) == current_shape:
-                self.shape_combo.setCurrentIndex(i)
-                break
-        form.addRow("Shape:", self.shape_combo)
 
         self.style_combo = QComboBox()
         self.style_combo.addItem("Waveform (scrolling)", "waveform")
@@ -366,9 +397,20 @@ class SettingsDialog(QDialog):
             "Waveform: classic scrolling oscilloscope — recent audio scrolls "
             "right-to-left.\n"
             "Spectrum: fixed-position frequency bars that bounce up and down "
-            "based on the energy in each band (a.k.a. spectrum analyzer / VU bars)."
+            "based on the energy in each band."
         )
         form.addRow("Visualization:", self.style_combo)
+
+        self.shape_combo = QComboBox()
+        self.shape_combo.addItem("Rounded rectangle", "rounded")
+        self.shape_combo.addItem("Pill", "pill")
+        self.shape_combo.addItem("Sharp rectangle", "rect")
+        current_shape = str(self.settings.get("oscilloscope.shape", "rounded"))
+        for i in range(self.shape_combo.count()):
+            if self.shape_combo.itemData(i) == current_shape:
+                self.shape_combo.setCurrentIndex(i)
+                break
+        form.addRow("Shape:", self.shape_combo)
 
         self.osc_w_spin = QSpinBox()
         self.osc_w_spin.setRange(120, 2000)
@@ -393,26 +435,14 @@ class SettingsDialog(QDialog):
         self.opacity_slider.valueChanged.connect(
             lambda v: self.opacity_value.setText(f"{v}%")
         )
-        opacity_row = QHBoxLayout()
-        opacity_row.addWidget(self.opacity_slider, 1)
-        opacity_row.addWidget(self.opacity_value)
-        opacity_row.setContentsMargins(0, 0, 0, 0)
-        opacity_widget = QWidget()
-        opacity_widget.setLayout(opacity_row)
-        form.addRow("Window opacity:", opacity_widget)
+        form.addRow("Window opacity:", self._row(self.opacity_slider, self.opacity_value))
 
         self.bg_slider = QSlider(Qt.Orientation.Horizontal)
         self.bg_slider.setRange(0, 255)
         self.bg_slider.setValue(int(self.settings.get("oscilloscope.background_alpha", 130)))
         self.bg_value = QLabel(str(self.bg_slider.value()))
         self.bg_slider.valueChanged.connect(lambda v: self.bg_value.setText(str(v)))
-        bg_row = QHBoxLayout()
-        bg_row.addWidget(self.bg_slider, 1)
-        bg_row.addWidget(self.bg_value)
-        bg_row.setContentsMargins(0, 0, 0, 0)
-        bg_widget = QWidget()
-        bg_widget.setLayout(bg_row)
-        form.addRow("Background alpha:", bg_widget)
+        form.addRow("Background alpha:", self._row(self.bg_slider, self.bg_value))
 
         self.color_active_btn = ColorButton(
             str(self.settings.get("oscilloscope.color_active", "#40dc8c"))
@@ -424,40 +454,25 @@ class SettingsDialog(QDialog):
         )
         form.addRow("Idle color:", self.color_idle_btn)
 
-        reset_row = QHBoxLayout()
         self.osc_reset_pos_btn = QPushButton("Reset position")
         self.osc_reset_pos_btn.clicked.connect(self._reset_osc_pos)
         self.osc_reset_size_btn = QPushButton("Reset size")
         self.osc_reset_size_btn.clicked.connect(self._reset_osc_size)
-        reset_row.addWidget(self.osc_reset_pos_btn)
-        reset_row.addWidget(self.osc_reset_size_btn)
-        reset_row.addStretch(1)
-        reset_widget = QWidget()
-        reset_widget.setLayout(reset_row)
-        form.addRow("", reset_widget)
+        form.addRow("", self._row(self.osc_reset_pos_btn, self.osc_reset_size_btn, stretch=True))
+        return page
 
-        info = QLabel(
-            "Note: changing model or device reloads Whisper in the background. "
-            "Hotkey and microphone changes apply on save."
-        )
-        info.setWordWrap(True)
-        info.setStyleSheet("color: #888;")
-        form.addRow(info)
-
-        save_btn = QPushButton("Save")
-        cancel_btn = QPushButton("Cancel")
-        save_btn.setDefault(True)
-        save_btn.clicked.connect(self._save)
-        cancel_btn.clicked.connect(self.reject)
-        btn_row = QHBoxLayout()
-        btn_row.addStretch(1)
-        btn_row.addWidget(save_btn)
-        btn_row.addWidget(cancel_btn)
-
-        layout = QVBoxLayout(self)
-        layout.addLayout(form)
-        layout.addSpacing(8)
-        layout.addLayout(btn_row)
+    @staticmethod
+    def _row(*widgets: QWidget, stretch: bool = False) -> QWidget:
+        """Wrap widgets in a horizontal layout for use as a single form-row value."""
+        h = QHBoxLayout()
+        h.setContentsMargins(0, 0, 0, 0)
+        for i, w in enumerate(widgets):
+            h.addWidget(w, 1 if (i == 0 and not stretch) else 0)
+        if stretch:
+            h.addStretch(1)
+        wrap = QWidget()
+        wrap.setLayout(h)
+        return wrap
 
     def _reset_osc_pos(self) -> None:
         self.settings.set("oscilloscope.x", None)
