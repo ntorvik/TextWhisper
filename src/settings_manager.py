@@ -28,6 +28,26 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # ',' and the next segment's first letter is lowercased.
     "continuation_detection_enabled": False,
     "continuation_window_ms": 500,
+    # Voice (TTS read-back of Claude Code responses).
+    # The hands-free other half of TextWhisper: when Claude Code finishes a
+    # response, a Stop hook hands the assistant message to TextWhisper,
+    # Anthropic Haiku summarises it into a conversational 2-3 sentence
+    # read-back, and Piper speaks it aloud via the user's chosen voice.
+    "voice_enabled": False,
+    "voice_engine": "piper",  # "piper" — neural local; future: "sapi", "elevenlabs"
+    "voice_model": "en_US-amy-medium",  # Piper voice model identifier
+    "voice_rate": 1.0,    # 0.5 .. 2.0 — multiplier for speech rate
+    "voice_volume": 0.85, # 0.0 .. 1.0
+    "voice_summarize": True,  # if False, read raw assistant text verbatim
+    "voice_summarize_model": "claude-haiku-4-5",
+    # API key lives ONLY in config.json (which is in %APPDATA%, never in
+    # the repo) or in the ANTHROPIC_API_KEY env var. Never logged. Empty
+    # string means "fall back to env".
+    "anthropic_api_key": "",
+    # Hotkey to interrupt an in-progress read-back ("shut up" key).
+    "voice_interrupt_hotkey": "<ctrl>+<alt>+s",
+    # Localhost port the Stop-hook script POSTs to.
+    "voice_ipc_port": 47821,
     "model_size": "large-v3",
     "compute_type": "float16",
     "device": "cuda",

@@ -150,6 +150,7 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._build_output_tab(), "Output")
         self.tabs.addTab(self._build_feedback_tab(), "Feedback")
         self.tabs.addTab(self._build_oscilloscope_tab(), "Oscilloscope")
+        self.tabs.addTab(self._build_voice_tab(), "Voice")
         self.tabs.addTab(self._build_about_tab(), "About")
 
         info = QLabel(
@@ -500,6 +501,184 @@ class SettingsDialog(QDialog):
         form.addRow("", self._row(self.osc_reset_pos_btn, self.osc_reset_size_btn, stretch=True))
         return page
 
+    def _build_voice_tab(self) -> QWidget:
+        """TTS read-back of Claude Code responses (the hands-free other half).
+
+        Stop hook → TextWhisper → summarise via Haiku → Piper → speakers.
+        """
+        page = QWidget()
+        form = QFormLayout(page)
+
+        self.voice_enabled_check = QCheckBox(
+            "Enable read-back of Claude Code responses"
+        )
+        self.voice_enabled_check.setChecked(
+            bool(self.settings.get("voice_enabled", False))
+        )
+        self.voice_enabled_check.setToolTip(
+            "When enabled, the Claude Code 'Stop' hook hands each finished "
+            "response to TextWhisper, which summarises it via Anthropic Haiku "
+            "and reads it aloud via Piper.\n\n"
+            "Requires: Anthropic API key (below) and the one-time Piper "
+            "download triggered the first time you click 'Test voice'."
+        )
+        form.addRow("Voice read-back:", self.voice_enabled_check)
+
+        self.voice_engine_combo = QComboBox()
+        self.voice_engine_combo.addItem("Piper (local neural, recommended)", "piper")
+        current_engine = str(self.settings.get("voice_engine", "piper"))
+        for i in range(self.voice_engine_combo.count()):
+            if self.voice_engine_combo.itemData(i) == current_engine:
+                self.voice_engine_combo.setCurrentIndex(i)
+                break
+        form.addRow("Engine:", self.voice_engine_combo)
+
+        # Piper voice models — populated lazily once Piper is downloaded; we
+        # ship the dropdown with a useful default selection so users see
+        # something even before the engine is initialised.
+        self.voice_model_combo = QComboBox()
+        self.voice_model_combo.setEditable(True)
+        self.voice_model_combo.addItems([
+            "en_US-amy-medium",
+            "en_US-libritts_r-medium",
+            "en_US-ryan-high",
+            "en_GB-alan-medium",
+        ])
+        self.voice_model_combo.setCurrentText(
+            str(self.settings.get("voice_model", "en_US-amy-medium"))
+        )
+        self.voice_model_combo.setToolTip(
+            "Piper voice model. Each downloads on first use (~50-80 MB) and "
+            "is cached under %APPDATA%\\TextWhisper\\piper\\voices\\. You can "
+            "type any model id from rhasspy/piper-voices on Hugging Face."
+        )
+        form.addRow("Voice model:", self.voice_model_combo)
+
+        self.voice_rate_spin = QDoubleSpinBox()
+        self.voice_rate_spin.setRange(0.5, 2.0)
+        self.voice_rate_spin.setSingleStep(0.05)
+        self.voice_rate_spin.setDecimals(2)
+        self.voice_rate_spin.setValue(float(self.settings.get("voice_rate", 1.0)))
+        self.voice_rate_spin.setSuffix("×")
+        self.voice_rate_spin.setToolTip(
+            "Speech rate multiplier. 1.0 = natural; 1.2-1.4 is comfortable "
+            "for most listeners; below 1.0 slows it down."
+        )
+        form.addRow("Rate:", self.voice_rate_spin)
+
+        self.voice_volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.voice_volume_slider.setRange(0, 100)
+        self.voice_volume_slider.setValue(
+            int(round(float(self.settings.get("voice_volume", 0.85)) * 100))
+        )
+        form.addRow("Volume:", self.voice_volume_slider)
+
+        self.voice_summarize_check = QCheckBox(
+            "Summarise responses before reading (Anthropic Haiku)"
+        )
+        self.voice_summarize_check.setChecked(
+            bool(self.settings.get("voice_summarize", True))
+        )
+        self.voice_summarize_check.setToolTip(
+            "When on, each Claude response is rewritten as a 2-3 sentence "
+            "conversational read-back before being spoken — code blocks and "
+            "technical detail are condensed.\n\n"
+            "When off, the raw assistant text is read verbatim. Useful if "
+            "you don't want to spend Anthropic API tokens on summarisation, "
+            "but be warned: raw output is brutal to listen to."
+        )
+        form.addRow("Summarise:", self.voice_summarize_check)
+
+        self.anthropic_key_edit = QLineEdit()
+        self.anthropic_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.anthropic_key_edit.setText(
+            str(self.settings.get("anthropic_api_key", ""))
+        )
+        self.anthropic_key_edit.setPlaceholderText(
+            "sk-ant-... (or leave blank to use ANTHROPIC_API_KEY env var)"
+        )
+        self.anthropic_key_edit.setToolTip(
+            "Stored locally in %APPDATA%\\TextWhisper\\config.json — never "
+            "committed to the repo, never written to logs. Leave blank to "
+            "fall back to the ANTHROPIC_API_KEY environment variable."
+        )
+        form.addRow("Anthropic API key:", self.anthropic_key_edit)
+
+        self.voice_interrupt_edit = QLineEdit()
+        self.voice_interrupt_edit.setText(
+            str(self.settings.get("voice_interrupt_hotkey", "<ctrl>+<alt>+s"))
+        )
+        self.voice_interrupt_edit.setToolTip(
+            "Pressing this chord while a read-back is in progress cuts the "
+            "speech off immediately. Default: Ctrl+Alt+S (mnemonic: Silence)."
+        )
+        record_voice_int_btn = QPushButton("Record...")
+        record_voice_int_btn.clicked.connect(
+            lambda: self._record_into(self.voice_interrupt_edit)
+        )
+        form.addRow(
+            "Interrupt hotkey:",
+            self._row(self.voice_interrupt_edit, record_voice_int_btn),
+        )
+
+        self.voice_port_spin = QSpinBox()
+        self.voice_port_spin.setRange(1024, 65535)
+        self.voice_port_spin.setValue(
+            int(self.settings.get("voice_ipc_port", 47821))
+        )
+        self.voice_port_spin.setToolTip(
+            "Localhost port the Claude Code Stop hook POSTs to. Only change "
+            "this if 47821 is already taken by another app. The bundled "
+            "claude-code-stop-hook.py reads this from config.json on each "
+            "invocation, so changing it here propagates automatically."
+        )
+        form.addRow("IPC port:", self.voice_port_spin)
+
+        self.voice_test_btn = QPushButton("Test voice")
+        self.voice_test_btn.setToolTip(
+            "Speak a short sample using the current voice model + rate + "
+            "volume. First click triggers the one-time Piper + voice-model "
+            "download (~110 MB) — subsequent clicks are instant."
+        )
+        self.voice_test_btn.clicked.connect(self._on_voice_test_clicked)
+        form.addRow("", self.voice_test_btn)
+
+        self.voice_status = QLabel(
+            "<small style='color:#888;'>Status: idle. Click 'Test voice' to "
+            "set up Piper on first use.</small>"
+        )
+        self.voice_status.setTextFormat(Qt.TextFormat.RichText)
+        self.voice_status.setWordWrap(True)
+        form.addRow("", self.voice_status)
+
+        # Disable the dependent fields when read-back is off — keeps the
+        # API key field untouchable so a stray paste can't leak in.
+        def _voice_fields_enabled(on: bool) -> None:
+            for w in (
+                self.voice_engine_combo,
+                self.voice_model_combo,
+                self.voice_rate_spin,
+                self.voice_volume_slider,
+                self.voice_summarize_check,
+                self.anthropic_key_edit,
+                self.voice_interrupt_edit,
+                record_voice_int_btn,
+                self.voice_port_spin,
+                self.voice_test_btn,
+            ):
+                w.setEnabled(on)
+        _voice_fields_enabled(self.voice_enabled_check.isChecked())
+        self.voice_enabled_check.toggled.connect(_voice_fields_enabled)
+
+        return page
+
+    def _on_voice_test_clicked(self) -> None:
+        """Phase 1 stub: real Piper playback wiring lands in Phase 2."""
+        self.voice_status.setText(
+            "<small style='color:#a85;'>Test voice not yet implemented — "
+            "Piper integration ships in the next build (Phase 2).</small>"
+        )
+
     def _build_about_tab(self) -> QWidget:
         page = QWidget()
         v = QVBoxLayout(page)
@@ -695,4 +874,19 @@ class SettingsDialog(QDialog):
         self.settings.set("oscilloscope.background_alpha", int(self.bg_slider.value()))
         self.settings.set("oscilloscope.shape", str(self.shape_combo.currentData()))
         self.settings.set("oscilloscope.style", str(self.style_combo.currentData()))
+        # Voice tab.
+        self.settings.set("voice_enabled", bool(self.voice_enabled_check.isChecked()))
+        self.settings.set("voice_engine", str(self.voice_engine_combo.currentData()))
+        self.settings.set("voice_model", self.voice_model_combo.currentText().strip())
+        self.settings.set("voice_rate", float(self.voice_rate_spin.value()))
+        self.settings.set(
+            "voice_volume", round(self.voice_volume_slider.value() / 100.0, 2)
+        )
+        self.settings.set("voice_summarize", bool(self.voice_summarize_check.isChecked()))
+        self.settings.set("anthropic_api_key", self.anthropic_key_edit.text().strip())
+        self.settings.set(
+            "voice_interrupt_hotkey",
+            self.voice_interrupt_edit.text().strip(),
+        )
+        self.settings.set("voice_ipc_port", int(self.voice_port_spin.value()))
         self.accept()
