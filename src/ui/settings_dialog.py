@@ -137,9 +137,13 @@ def _palette_pick(initial: QColor, parent: QWidget) -> QColor | None:
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, settings, parent=None) -> None:
+    def __init__(self, settings, parent=None, tts=None) -> None:
         super().__init__(parent)
         self.settings = settings
+        # Optional :class:`TTSService` so the Voice tab's "Test voice" button
+        # can speak a sample without re-loading Piper. ``None`` is fine for
+        # tests and any caller that doesn't need playback.
+        self._tts = tts
         self.setWindowTitle("TextWhisper Settings")
         self.setMinimumWidth(520)
         self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
@@ -673,10 +677,43 @@ class SettingsDialog(QDialog):
         return page
 
     def _on_voice_test_clicked(self) -> None:
-        """Phase 1 stub: real Piper playback wiring lands in Phase 2."""
+        """Speak a short sample with the current Voice-tab settings.
+
+        We commit the current dialog values to settings BEFORE calling the
+        TTS service so the test honours your in-progress edits — model
+        choice, rate, volume, etc. The dialog then re-reads them on Save
+        if you click OK.
+        """
+        if self._tts is None:
+            self.voice_status.setText(
+                "<small style='color:#c44;'>No TTS service available "
+                "(running outside the main app?).</small>"
+            )
+            return
+        # Commit current Voice-tab edits so TTS sees them.
+        self.settings.set("voice_model", self.voice_model_combo.currentText().strip())
+        self.settings.set("voice_rate", float(self.voice_rate_spin.value()))
+        self.settings.set(
+            "voice_volume", round(self.voice_volume_slider.value() / 100.0, 2)
+        )
+        # Wire status updates from the service into our label for the
+        # duration of the test. Disconnect on finish to avoid leaks.
+        import contextlib
+        with contextlib.suppress(TypeError, RuntimeError):
+            self._tts.status.disconnect(self._on_voice_status)
+        self._tts.status.connect(self._on_voice_status)
+        self._tts.error.connect(self._on_voice_status)
         self.voice_status.setText(
-            "<small style='color:#a85;'>Test voice not yet implemented — "
-            "Piper integration ships in the next build (Phase 2).</small>"
+            "<small style='color:#888;'>Preparing test...</small>"
+        )
+        self._tts.speak(
+            "TextWhisper voice test. "
+            "If you can hear this, your read-back is configured and ready."
+        )
+
+    def _on_voice_status(self, message: str) -> None:
+        self.voice_status.setText(
+            f"<small style='color:#888;'>Status: {html.escape(message)}</small>"
         )
 
     def _build_about_tab(self) -> QWidget:

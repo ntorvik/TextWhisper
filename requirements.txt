@@ -4,6 +4,11 @@ sounddevice>=0.4.6
 numpy>=1.26.0
 pynput>=1.7.7
 
+# Piper TTS — local neural voice synthesis for Claude-Code read-back.
+# Brings onnxruntime as a dep; voice models (~50-80 MB each) are
+# downloaded on first use to %APPDATA%/TextWhisper/piper-voices/.
+piper-tts>=1.4.0
+
 # Windows-only: pywin32 powers the silent .lnk shortcut + named-mutex single-instance lock.
 pywin32>=306; sys_platform == 'win32'
 

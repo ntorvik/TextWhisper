@@ -25,7 +25,12 @@ hiddenimports: list[str] = []
 datas: list[tuple] = []
 binaries: list[tuple] = []
 
-for pkg in ("faster_whisper", "ctranslate2", "sounddevice", "pynput", "PyQt6"):
+for pkg in (
+    "faster_whisper", "ctranslate2", "sounddevice", "pynput", "PyQt6",
+    # piper-tts ships espeak-ng-data, ONNX runtime libs, and a config module
+    # that PyInstaller's heuristic misses without help.
+    "piper", "onnxruntime",
+):
     pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)
     datas += pkg_datas
     binaries += pkg_binaries
@@ -59,6 +64,7 @@ a = Analysis(
         "src.single_instance",
         "src.sound_player",
         "src.transcription",
+        "src.voice",
         "src.ui.hotkey_recorder",
         "src.ui.oscilloscope",
         "src.ui.settings_dialog",

@@ -18,6 +18,7 @@ from .transcription import TranscriptionEngine
 from .ui.oscilloscope import OscilloscopeWidget
 from .ui.settings_dialog import SettingsDialog
 from .ui.tray import TrayController
+from .voice import TTSService
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ class TextWhisperApp(QObject):
 
         self.tray = TrayController(parent=self)
         self.oscilloscope = OscilloscopeWidget(self.settings)
+        self.tts = TTSService(self.settings)
 
         self._is_capturing = False
         self._model_loaded = False
@@ -152,6 +154,7 @@ class TextWhisperApp(QObject):
                 self._stop_capture()
             self.hotkey.stop()
             self.engine.stop()
+            self.tts.shutdown()
         finally:
             self.qapp.quit()
 
@@ -283,7 +286,7 @@ class TextWhisperApp(QObject):
         prev_compute = self.settings.get("compute_type")
         prev_mic = self.settings.get("microphone_device")
 
-        dlg = SettingsDialog(self.settings)
+        dlg = SettingsDialog(self.settings, tts=self.tts)
         if not dlg.exec():
             return
 
