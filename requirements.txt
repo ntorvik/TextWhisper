@@ -9,6 +9,13 @@ pynput>=1.7.7
 # downloaded on first use to %APPDATA%/TextWhisper/piper-voices/.
 piper-tts>=1.4.0
 
+# Anthropic SDK — used to summarise Claude Code responses into a 2-3
+# sentence conversational read-back via Claude Haiku before TTS plays
+# them aloud. API key is loaded from settings ('anthropic_api_key' in
+# config.json) or the ANTHROPIC_API_KEY env var; never bundled in the
+# repo or written to logs.
+anthropic>=0.40
+
 # Windows-only: pywin32 powers the silent .lnk shortcut + named-mutex single-instance lock.
 pywin32>=306; sys_platform == 'win32'
 

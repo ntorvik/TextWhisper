@@ -30,6 +30,9 @@ for pkg in (
     # piper-tts ships espeak-ng-data, ONNX runtime libs, and a config module
     # that PyInstaller's heuristic misses without help.
     "piper", "onnxruntime",
+    # Anthropic SDK has lazy submodule loading that PyInstaller's static
+    # scan misses; collect_all pulls in everything plus pydantic + httpx.
+    "anthropic",
 ):
     pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)
     datas += pkg_datas
@@ -63,6 +66,7 @@ a = Analysis(
         "src.settings_manager",
         "src.single_instance",
         "src.sound_player",
+        "src.summarizer",
         "src.transcription",
         "src.voice",
         "src.ui.hotkey_recorder",
