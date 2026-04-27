@@ -84,3 +84,14 @@ def test_changed_signal_emits_with_key(tmp_appdata, qapp):
     sm.set("hotkey", "<alt>+x")
     qapp.processEvents()
     assert "hotkey" in received
+
+
+def test_paste_target_lock_defaults_present(tmp_appdata):
+    sm = SettingsManager()
+    assert sm.get("paste_target_lock_enabled") is False
+    assert sm.get("lock_toggle_hotkey") == "<alt>+l"
+    assert sm.get("border_overlay_enabled") is True
+    assert sm.get("border_color") == "#ff9900"
+    assert sm.get("border_thickness") == 3
+    assert sm.get("play_lock_sounds") is True
+    assert sm.get("focus_settle_ms") == 50
