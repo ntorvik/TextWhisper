@@ -154,3 +154,30 @@ def test_tray_lock_label_when_sticky_set(qapp, tmp_appdata):
     label = tray._lock_action_label().lower()
     assert "unlock" in label
     assert "claude code" in label
+
+
+def test_tray_lock_labels_refresh_on_menu_open(qapp, tmp_appdata):
+    """Spec §5.7: title cached for 1s (re-cached on menu open); label reflects
+    current foreground at menu-render time. We don't have a real menu open
+    event in headless tests, so we trigger the wired slot directly."""
+    from unittest.mock import patch
+    from src.settings_manager import SettingsManager
+    from src.ui.tray import TrayController
+
+    sm = SettingsManager()
+    sm.set("paste_lock_enabled", True)
+    tray = TrayController(parent=None, settings=sm)
+    # Lock to hwnd 4242 while it's the foreground.
+    with patch("src.ui.tray.win32.get_window_title", return_value="Notepad"), \
+         patch("src.ui.tray.win32.get_foreground_window", return_value=4242):
+        tray.set_lock_state(4242, "sticky")
+        assert "unlock" in tray._lock_action_label().lower()
+
+    # Now foreground changes (user alt-tabs). Simulate the menu opening:
+    # the aboutToShow slot calls _refresh_lock_labels.
+    with patch("src.ui.tray.win32.get_window_title", return_value="Notepad"), \
+         patch("src.ui.tray.win32.get_foreground_window", return_value=9999):
+        tray._refresh_lock_labels()
+        label = tray._lock_action_label().lower()
+        assert "re-lock" in label
+        assert "current window" in label

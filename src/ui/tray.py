@@ -98,6 +98,11 @@ class TrayController(QObject):
 
         self.tray.setContextMenu(menu)
         self._menu = menu
+        # Spec §5.7: the toggle action label depends on which window is
+        # foreground at the moment the menu opens (Unlock vs Re-lock), and
+        # the cached target title is only valid for ~1 second / re-cached
+        # on menu open. Refresh both right before the menu paints.
+        menu.aboutToShow.connect(self._refresh_lock_labels)
 
         self.action_toggle.triggered.connect(self.toggle_capture)
         self.action_settings.triggered.connect(self.show_settings)
@@ -160,18 +165,37 @@ class TrayController(QObject):
     def set_lock_state(self, hwnd, source: str) -> None:
         self._current_target_hwnd = hwnd
         self._current_source = source
-        # Snapshot foreground + title at the moment the state changes.
-        # _lock_action_label / _lock_status_label consume these rather than
-        # re-querying so labels stay consistent between when the menu was
-        # last refreshed and when it's read.
+        # Visibility is purely a function of the master setting + source/hwnd,
+        # so it only needs to refresh on actual state changes — not on every
+        # menu open.
+        self._refresh_lock_visibility()
+        # One-shot label refresh: the lock chime + tray notification might
+        # draw the user to inspect immediately, so the label/title must be
+        # right even before they open the menu (which would otherwise re-run
+        # this via aboutToShow).
+        self._refresh_lock_labels()
+
+    def _refresh_lock_labels(self) -> None:
+        """Re-query foreground hwnd + target title and repaint the lock
+        section's status line and toggle action.
+
+        Wired to QMenu.aboutToShow so labels reflect live state at menu-open
+        time per spec §5.7 (the toggle text picks Unlock vs Re-lock based on
+        whether the locked window is currently foreground; the cached title
+        is "re-cached on menu open"). Also called from set_lock_state for
+        the immediate post-change update.
+        """
+        # Guard: Qt may fire aboutToShow before the lock-section actions
+        # have been built (mirrors _refresh_lock_visibility's guard pattern).
+        if not hasattr(self, "_lock_status_action"):
+            return
+        hwnd = self._current_target_hwnd
         self._current_foreground_hwnd = win32.get_foreground_window()
         self._current_target_title = (
             win32.get_window_title(hwnd) if hwnd is not None else ""
         )
-        self._refresh_lock_visibility()
-        if hasattr(self, "_lock_status_action"):
-            self._lock_status_action.setText(self._lock_status_label())
-            self._lock_toggle_action.setText(self._lock_action_label())
+        self._lock_status_action.setText(self._lock_status_label())
+        self._lock_toggle_action.setText(self._lock_action_label())
 
     def _lock_section_visible(self) -> bool:
         if self.settings is None:
