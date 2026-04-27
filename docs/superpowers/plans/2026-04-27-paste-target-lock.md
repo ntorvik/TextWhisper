@@ -29,7 +29,7 @@
 - `src/ui/tray.py` — new menu section for lock state and toggle
 - `src/ui/settings_dialog.py` — new "Paste target lock" section
 - `src/settings_manager.py` — new keys with defaults
-- `src/hotkey_manager.py` — extend `validate_hotkeys` to include `lock_toggle_hotkey`
+- `src/hotkey_manager.py` — extend `validate_hotkeys` to include `paste_lock_hotkey`
 - `tests/test_keyboard_output.py` — new target-aware paste tests
 - `tests/test_app.py` — controller wiring tests
 - `tests/test_sound_player.py` — new tone gating tests
@@ -322,13 +322,13 @@ Append to `tests/test_settings_manager.py`:
 ```python
 def test_paste_target_lock_defaults_present(tmp_appdata):
     sm = SettingsManager()
-    assert sm.get("paste_target_lock_enabled") is False
-    assert sm.get("lock_toggle_hotkey") == "<alt>+l"
-    assert sm.get("border_overlay_enabled") is True
-    assert sm.get("border_color") == "#ff9900"
-    assert sm.get("border_thickness") == 3
-    assert sm.get("play_lock_sounds") is True
-    assert sm.get("focus_settle_ms") == 50
+    assert sm.get("paste_lock_enabled") is False
+    assert sm.get("paste_lock_hotkey") == "<alt>+l"
+    assert sm.get("paste_lock_border_enabled") is True
+    assert sm.get("paste_lock_border_color") == "#ff9900"
+    assert sm.get("paste_lock_border_thickness") == 3
+    assert sm.get("paste_lock_play_sounds") is True
+    assert sm.get("paste_lock_focus_settle_ms") == 50
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -343,13 +343,13 @@ Edit `src/settings_manager.py` — add the following BEFORE the `"oscilloscope":
 ```python
     # ---- Paste target lock ----------------------------------------
     # See docs/superpowers/specs/2026-04-27-paste-target-lock-design.md
-    "paste_target_lock_enabled": False,
-    "lock_toggle_hotkey": "<alt>+l",
-    "border_overlay_enabled": True,
-    "border_color": "#ff9900",
-    "border_thickness": 3,
-    "play_lock_sounds": True,
-    "focus_settle_ms": 50,
+    "paste_lock_enabled": False,
+    "paste_lock_hotkey": "<alt>+l",
+    "paste_lock_border_enabled": True,
+    "paste_lock_border_color": "#ff9900",
+    "paste_lock_border_thickness": 3,
+    "paste_lock_play_sounds": True,
+    "paste_lock_focus_settle_ms": 50,
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -364,8 +364,8 @@ git add src/settings_manager.py tests/test_settings_manager.py
 git commit -m "Add paste-target-lock setting defaults
 
 7 new keys with defaults that preserve existing behavior
-(paste_target_lock_enabled=False) and sensible feature defaults
-(border_overlay_enabled=True, play_lock_sounds=True, etc.).
+(paste_lock_enabled=False) and sensible feature defaults
+(paste_lock_border_enabled=True, paste_lock_play_sounds=True, etc.).
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
@@ -404,7 +404,7 @@ from src.settings_manager import SettingsManager
 @pytest.fixture
 def settings(tmp_appdata):
     sm = SettingsManager()
-    sm.set("paste_target_lock_enabled", True)
+    sm.set("paste_lock_enabled", True)
     return sm
 
 
@@ -425,7 +425,7 @@ def test_dictation_started_captures_foreground(settings, qapp):
 
 
 def test_dictation_started_skipped_when_feature_disabled(settings, qapp):
-    settings.set("paste_target_lock_enabled", False)
+    settings.set("paste_lock_enabled", False)
     c = PasteTargetController(settings)
     with patch("src.paste_target.win32.get_foreground_window", return_value=999):
         c.on_dictation_started()
@@ -507,7 +507,7 @@ class PasteTargetController(QObject):
     # ---- feature gate -------------------------------------------------
 
     def _enabled(self) -> bool:
-        return bool(self.settings.get("paste_target_lock_enabled", False))
+        return bool(self.settings.get("paste_lock_enabled", False))
 
     # ---- per-session capture -----------------------------------------
 
@@ -626,7 +626,7 @@ def test_toggle_sticky_off_target_re_targets(settings, qapp):
 
 
 def test_toggle_sticky_skipped_when_feature_disabled(settings, qapp):
-    settings.set("paste_target_lock_enabled", False)
+    settings.set("paste_lock_enabled", False)
     c = PasteTargetController(settings)
     with patch("src.paste_target.win32.get_foreground_window", return_value=42):
         c.toggle_sticky()
@@ -967,7 +967,7 @@ def test_paste_with_target_hwnd_does_focus_shift(tmp_appdata, qapp):
     sm.set("output_method", "paste")
     sm.set("paste_settle_ms", 0)
     sm.set("paste_modifier_clear_ms", 0)
-    sm.set("focus_settle_ms", 0)
+    sm.set("paste_lock_focus_settle_ms", 0)
     with patch("src.keyboard_output.Controller") as ctrl_cls, \
          patch.object(w, "is_window", return_value=True), \
          patch.object(w, "get_window_pid", return_value=999), \
@@ -1012,7 +1012,7 @@ def test_paste_with_minimized_target_calls_restore(tmp_appdata, qapp):
     sm.set("output_method", "paste")
     sm.set("paste_settle_ms", 0)
     sm.set("paste_modifier_clear_ms", 0)
-    sm.set("focus_settle_ms", 0)
+    sm.set("paste_lock_focus_settle_ms", 0)
     with patch("src.keyboard_output.Controller") as ctrl_cls, \
          patch.object(w, "is_window", return_value=True), \
          patch.object(w, "get_window_pid", return_value=999), \
@@ -1103,7 +1103,7 @@ Edit `src/keyboard_output.py` — replace the `_paste_text` body. Find the exist
                     "(focus-stealing protection or UIPI block); pasting anyway.",
                     target_hwnd,
                 )
-            focus_settle = max(0, int(self.settings.get("focus_settle_ms", 50))) / 1000.0
+            focus_settle = max(0, int(self.settings.get("paste_lock_focus_settle_ms", 50))) / 1000.0
             if focus_settle > 0:
                 time.sleep(focus_settle)
 
@@ -1155,7 +1155,7 @@ git commit -m "_paste_text routes to target_hwnd with focus restore
 
 When target_hwnd is supplied: validate (return 0 if closed),
 capture previous foreground, restore-if-minimized, set foreground
-to target with AttachThreadInput mitigation, sleep focus_settle_ms,
+to target with AttachThreadInput mitigation, sleep paste_lock_focus_settle_ms,
 do existing Ctrl+V + trailing space, restore previous foreground.
 Default path (target_hwnd=None) is unchanged.
 
@@ -1183,7 +1183,7 @@ def test_type_text_with_target_hwnd_does_focus_shift(tmp_appdata, qapp):
     sm = SettingsManager()
     sm.set("output_method", "type")
     sm.set("type_delay_ms", 0)
-    sm.set("focus_settle_ms", 0)
+    sm.set("paste_lock_focus_settle_ms", 0)
     sm.set("trailing_space", False)
     with patch("src.keyboard_output.Controller") as ctrl_cls, \
          patch.object(w, "is_window", return_value=True), \
@@ -1235,7 +1235,7 @@ Edit `src/keyboard_output.py` — replace `_type_text` body:
             if w.is_iconic(target_hwnd):
                 w.restore_window(target_hwnd)
             w.set_foreground_with_attach(target_hwnd)
-            focus_settle = max(0, int(self.settings.get("focus_settle_ms", 50))) / 1000.0
+            focus_settle = max(0, int(self.settings.get("paste_lock_focus_settle_ms", 50))) / 1000.0
             if focus_settle > 0:
                 time.sleep(focus_settle)
 
@@ -1293,7 +1293,7 @@ Append to `tests/test_sound_player.py`:
 ```python
 def test_play_lock_calls_sd_play_when_enabled(tmp_appdata):
     sm = SettingsManager()
-    sm.set("play_lock_sounds", True)
+    sm.set("paste_lock_play_sounds", True)
     sp = SoundPlayer(sm)
     with patch("src.sound_player.sd.play") as p:
         sp.play_lock()
@@ -1302,7 +1302,7 @@ def test_play_lock_calls_sd_play_when_enabled(tmp_appdata):
 
 def test_play_lock_skipped_when_disabled(tmp_appdata):
     sm = SettingsManager()
-    sm.set("play_lock_sounds", False)
+    sm.set("paste_lock_play_sounds", False)
     sp = SoundPlayer(sm)
     with patch("src.sound_player.sd.play") as p:
         sp.play_lock()
@@ -1312,7 +1312,7 @@ def test_play_lock_skipped_when_disabled(tmp_appdata):
 
 def test_play_unlock_calls_sd_play_when_enabled(tmp_appdata):
     sm = SettingsManager()
-    sm.set("play_lock_sounds", True)
+    sm.set("paste_lock_play_sounds", True)
     sp = SoundPlayer(sm)
     with patch("src.sound_player.sd.play") as p:
         sp.play_unlock()
@@ -1377,13 +1377,13 @@ class SoundPlayer:
         self._play(self._stop)
 
     def play_lock(self) -> None:
-        if not bool(self.settings.get("play_lock_sounds", True)):
+        if not bool(self.settings.get("paste_lock_play_sounds", True)):
             return
         self._rebuild_if_volume_changed()
         self._play(self._lock_chime)
 
     def play_unlock(self) -> None:
-        if not bool(self.settings.get("play_lock_sounds", True)):
+        if not bool(self.settings.get("paste_lock_play_sounds", True)):
             return
         self._rebuild_if_volume_changed()
         self._play(self._unlock_chime)
@@ -1410,7 +1410,7 @@ git commit -m "Add lock/unlock chimes to SoundPlayer
 
 LOCK_FREQS = (523, 698) Hz (C5→F5, ascending = lock).
 UNLOCK_FREQS = (698, 523) Hz (F5→C5, descending = unlock).
-Both gated by new play_lock_sounds setting (default True).
+Both gated by new paste_lock_play_sounds setting (default True).
 Procedurally generated via _make_chime, same path as ready/stop.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
@@ -1451,8 +1451,8 @@ from src.ui.window_border_overlay import WindowBorderOverlay
 @pytest.fixture
 def settings(tmp_appdata):
     sm = SettingsManager()
-    sm.set("paste_target_lock_enabled", True)
-    sm.set("border_overlay_enabled", True)
+    sm.set("paste_lock_enabled", True)
+    sm.set("paste_lock_border_enabled", True)
     return sm
 
 
@@ -1506,7 +1506,7 @@ def test_target_minimized_hides_overlay(settings, qapp):
 
 def test_master_disable_setting_hides_overlay(settings, qapp):
     o = WindowBorderOverlay(settings)
-    settings.set("border_overlay_enabled", False)
+    settings.set("paste_lock_border_enabled", False)
     with patch.object(w, "is_window", return_value=True), \
          patch.object(w, "is_iconic", return_value=False), \
          patch.object(w, "get_window_rect", return_value=(0, 0, 100, 100)):
@@ -1584,7 +1584,7 @@ class WindowBorderOverlay(QWidget):
     # ---- timer tick --------------------------------------------------
 
     def _tick(self) -> None:
-        if not bool(self.settings.get("border_overlay_enabled", True)):
+        if not bool(self.settings.get("paste_lock_border_enabled", True)):
             self.hide()
             return
         hwnd = self._target_hwnd
@@ -1613,8 +1613,8 @@ class WindowBorderOverlay(QWidget):
     # ---- painting ----------------------------------------------------
 
     def paintEvent(self, _event) -> None:
-        color_hex = str(self.settings.get("border_color", "#ff9900"))
-        thickness = max(1, int(self.settings.get("border_thickness", 3)))
+        color_hex = str(self.settings.get("paste_lock_border_color", "#ff9900"))
+        thickness = max(1, int(self.settings.get("paste_lock_border_thickness", 3)))
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         pen = QPen(QColor(color_hex), thickness)
@@ -1640,7 +1640,7 @@ git commit -m "Add WindowBorderOverlay widget for sticky-locked targets
 Frameless, always-on-top, click-through Qt widget that polls the
 tracked HWND's GetWindowRect every 30 ms via win32_window_utils
 and draws a colored hollow rectangle around it. Auto-hides when
-target is minimized, closed, or when border_overlay_enabled is
+target is minimized, closed, or when paste_lock_border_enabled is
 False.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
@@ -1798,23 +1798,23 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 Append to `tests/test_app.py`:
 
 ```python
-def test_lock_toggle_hotkey_in_mapping_only_when_enabled(app):
-    app.settings.set("paste_target_lock_enabled", False)
+def test_paste_lock_hotkey_in_mapping_only_when_enabled(app):
+    app.settings.set("paste_lock_enabled", False)
     assert "lock_toggle" not in app._build_hotkey_mapping()
 
-    app.settings.set("paste_target_lock_enabled", True)
+    app.settings.set("paste_lock_enabled", True)
     assert app._build_hotkey_mapping().get("lock_toggle") == "<alt>+l"
 
 
-def test_lock_toggle_hotkey_dropped_when_clashes(app):
-    app.settings.set("paste_target_lock_enabled", True)
+def test_paste_lock_hotkey_dropped_when_clashes(app):
+    app.settings.set("paste_lock_enabled", True)
     app.settings.set("hotkey", "<alt>+z")
     app.settings.set("delete_hotkey", "<delete>")
-    app.settings.set("lock_toggle_hotkey", "<alt>+z")
+    app.settings.set("paste_lock_hotkey", "<alt>+z")
     assert "lock_toggle" not in app._build_hotkey_mapping()
-    app.settings.set("lock_toggle_hotkey", "<delete>")
+    app.settings.set("paste_lock_hotkey", "<delete>")
     assert "lock_toggle" not in app._build_hotkey_mapping()
-    app.settings.set("lock_toggle_hotkey", "<alt>+l")
+    app.settings.set("paste_lock_hotkey", "<alt>+l")
     assert "lock_toggle" in app._build_hotkey_mapping()
 
 
@@ -1839,7 +1839,7 @@ def test_stop_capture_calls_paste_target_on_dictation_stopped(app):
     ds.assert_called_once()
 
 
-def test_lock_toggle_hotkey_calls_controller_toggle(app):
+def test_paste_lock_hotkey_calls_controller_toggle(app):
     with patch.object(app.paste_target, "toggle_sticky") as t:
         app._on_hotkey_triggered("lock_toggle")
     t.assert_called_once()
@@ -1872,9 +1872,9 @@ c) Extend `_build_hotkey_mapping` — add this block before `return m`:
         # Paste-target-lock toggle (Alt+L by default). Only registered when
         # the feature is enabled AND the chord doesn't collide with any of
         # the others (toggle/delete/voice_interrupt).
-        if bool(self.settings.get("paste_target_lock_enabled", False)):
+        if bool(self.settings.get("paste_lock_enabled", False)):
             lock_hk = str(
-                self.settings.get("lock_toggle_hotkey", "<alt>+l") or ""
+                self.settings.get("paste_lock_hotkey", "<alt>+l") or ""
             ).strip()
             existing = {toggle, delete_hk, m.get("voice_interrupt", "")}
             if lock_hk and lock_hk not in existing:
@@ -1946,7 +1946,7 @@ Append to `tests/test_app.py`:
 ```python
 def test_transcription_passes_target_hwnd_when_locked(app):
     """current_target() result is forwarded into keyboard_out.type_text."""
-    app.settings.set("paste_target_lock_enabled", True)
+    app.settings.set("paste_lock_enabled", True)
     app.paste_target._sticky_hwnd = 4242
     with patch.object(app.keyboard_out, "type_text", return_value=10) as tt:
         app._on_transcription("hello")
@@ -1956,7 +1956,7 @@ def test_transcription_passes_target_hwnd_when_locked(app):
 
 
 def test_transcription_passes_none_when_no_lock(app):
-    app.settings.set("paste_target_lock_enabled", True)
+    app.settings.set("paste_lock_enabled", True)
     # No sticky, no per-session.
     with patch.object(app.keyboard_out, "type_text", return_value=10) as tt:
         app._on_transcription("hello")
@@ -2015,7 +2015,7 @@ Append to `tests/test_app.py`:
 
 ```python
 def test_lock_changed_sticky_to_hwnd_shows_border_and_plays_lock(app):
-    app.settings.set("paste_target_lock_enabled", True)
+    app.settings.set("paste_lock_enabled", True)
     with patch.object(app.border_overlay, "set_target_hwnd") as bord, \
          patch.object(app.sound_player, "play_lock") as plk, \
          patch.object(app.sound_player, "play_unlock") as pul:
@@ -2026,7 +2026,7 @@ def test_lock_changed_sticky_to_hwnd_shows_border_and_plays_lock(app):
 
 
 def test_lock_changed_sticky_to_none_hides_border_and_plays_unlock(app):
-    app.settings.set("paste_target_lock_enabled", True)
+    app.settings.set("paste_lock_enabled", True)
     # Pretend we had a sticky lock; the handler tracks previous state.
     app._last_sticky_hwnd = 4242
     with patch.object(app.border_overlay, "set_target_hwnd") as bord, \
@@ -2040,7 +2040,7 @@ def test_lock_changed_sticky_to_none_hides_border_and_plays_unlock(app):
 
 def test_lock_changed_session_does_not_touch_border_or_sound(app):
     """Per-session captures are silent and borderless."""
-    app.settings.set("paste_target_lock_enabled", True)
+    app.settings.set("paste_lock_enabled", True)
     with patch.object(app.border_overlay, "set_target_hwnd") as bord, \
          patch.object(app.sound_player, "play_lock") as plk, \
          patch.object(app.sound_player, "play_unlock") as pul:
@@ -2336,7 +2336,7 @@ def test_tray_lock_section_hidden_when_master_setting_off(qapp, tmp_appdata):
     from src.ui.tray import TrayController
 
     sm = SettingsManager()
-    sm.set("paste_target_lock_enabled", False)
+    sm.set("paste_lock_enabled", False)
     tray = TrayController(parent=None, settings=sm)
     tray.set_lock_state(None, "none")
     assert tray._lock_section_visible() is False
@@ -2347,7 +2347,7 @@ def test_tray_lock_section_visible_when_enabled(qapp, tmp_appdata):
     from src.ui.tray import TrayController
 
     sm = SettingsManager()
-    sm.set("paste_target_lock_enabled", True)
+    sm.set("paste_lock_enabled", True)
     tray = TrayController(parent=None, settings=sm)
     tray.set_lock_state(None, "none")
     assert tray._lock_section_visible() is True
@@ -2358,7 +2358,7 @@ def test_tray_lock_label_when_no_lock(qapp, tmp_appdata):
     from src.ui.tray import TrayController
 
     sm = SettingsManager()
-    sm.set("paste_target_lock_enabled", True)
+    sm.set("paste_lock_enabled", True)
     tray = TrayController(parent=None, settings=sm)
     tray.set_lock_state(None, "none")
     # Label should be "Lock paste target → current window".
@@ -2373,7 +2373,7 @@ def test_tray_lock_label_when_sticky_set(qapp, tmp_appdata):
     from src.ui.tray import TrayController
 
     sm = SettingsManager()
-    sm.set("paste_target_lock_enabled", True)
+    sm.set("paste_lock_enabled", True)
     tray = TrayController(parent=None, settings=sm)
     with patch("src.ui.tray.win32.get_window_title", return_value="Claude Code"), \
          patch("src.ui.tray.win32.get_foreground_window", return_value=4242):
@@ -2456,7 +2456,7 @@ Add the new public methods:
     def _lock_section_visible(self) -> bool:
         if self.settings is None:
             return False
-        return bool(self.settings.get("paste_target_lock_enabled", False))
+        return bool(self.settings.get("paste_lock_enabled", False))
 
     def _refresh_lock_visibility(self) -> None:
         visible = self._lock_section_visible()
@@ -2542,7 +2542,7 @@ git commit -m "Tray menu — lock state surfacing
 New section between existing items: status line ('Paste target: ...')
 + toggle action with dynamic label following spec §5.7 rules
 (Lock / Unlock / Re-lock based on sticky-set + foreground match).
-Section auto-hides when paste_target_lock_enabled is False.
+Section auto-hides when paste_lock_enabled is False.
 
 TrayController gains a settings reference (back-compat default
 None) and a toggle_lock signal that app wires to controller.
@@ -2577,16 +2577,16 @@ def test_settings_dialog_has_paste_target_lock_section(qapp, tmp_appdata):
     sm = SettingsManager()
     dlg = SettingsDialog(sm)
     # Find by name attribute we will set on each new control.
-    assert dlg.findChild(type(None), "paste_target_lock_enabled_check") is None or True
+    assert dlg.findChild(type(None), "paste_lock_enabled_check") is None or True
     # Use a more reliable check — look for the named widgets.
     names = {w.objectName() for w in dlg.findChildren(object) if w.objectName()}
     expected = {
-        "paste_target_lock_enabled_check",
-        "lock_toggle_hotkey_recorder",
-        "border_overlay_enabled_check",
-        "border_color_button",
-        "border_thickness_spin",
-        "play_lock_sounds_check",
+        "paste_lock_enabled_check",
+        "paste_lock_hotkey_recorder",
+        "paste_lock_border_enabled_check",
+        "paste_lock_border_color_button",
+        "paste_lock_border_thickness_spin",
+        "paste_lock_play_sounds_check",
     }
     missing = expected - names
     assert not missing, f"missing widgets: {missing}"
@@ -2598,11 +2598,11 @@ def test_paste_target_lock_section_writes_back_to_settings(qapp, tmp_appdata):
 
     sm = SettingsManager()
     dlg = SettingsDialog(sm)
-    enable_check = dlg.findChild(object, "paste_target_lock_enabled_check")
+    enable_check = dlg.findChild(object, "paste_lock_enabled_check")
     assert enable_check is not None
     enable_check.setChecked(True)
     dlg._save()  # the existing save method in the dialog (verify name when reading)
-    assert sm.get("paste_target_lock_enabled") is True
+    assert sm.get("paste_lock_enabled") is True
 ```
 
 NOTE: `_save` is a placeholder name — when implementing, replace with the dialog's actual save method. Check the existing dialog code first.
@@ -2630,23 +2630,23 @@ Edit `src/ui/settings_dialog.py` — add a new section method following the exis
         layout = QFormLayout(grp)
 
         self._lock_enable_check = QCheckBox("Enable paste-target lock")
-        self._lock_enable_check.setObjectName("paste_target_lock_enabled_check")
+        self._lock_enable_check.setObjectName("paste_lock_enabled_check")
         self._lock_enable_check.setChecked(
-            bool(self.settings.get("paste_target_lock_enabled", False))
+            bool(self.settings.get("paste_lock_enabled", False))
         )
         self._lock_enable_check.toggled.connect(self._refresh_lock_section_enable)
         layout.addRow(self._lock_enable_check)
 
         self._lock_hotkey_recorder = HotkeyRecorder(
-            self.settings.get("lock_toggle_hotkey", "<alt>+l")
+            self.settings.get("paste_lock_hotkey", "<alt>+l")
         )
-        self._lock_hotkey_recorder.setObjectName("lock_toggle_hotkey_recorder")
+        self._lock_hotkey_recorder.setObjectName("paste_lock_hotkey_recorder")
         layout.addRow("Lock toggle hotkey:", self._lock_hotkey_recorder)
 
         self._border_enable_check = QCheckBox("Show colored border around locked window")
-        self._border_enable_check.setObjectName("border_overlay_enabled_check")
+        self._border_enable_check.setObjectName("paste_lock_border_enabled_check")
         self._border_enable_check.setChecked(
-            bool(self.settings.get("border_overlay_enabled", True))
+            bool(self.settings.get("paste_lock_border_enabled", True))
         )
         layout.addRow(self._border_enable_check)
 
@@ -2654,26 +2654,26 @@ Edit `src/ui/settings_dialog.py` — add a new section method following the exis
         color_row = QWidget()
         color_layout = QHBoxLayout(color_row)
         color_layout.setContentsMargins(0, 0, 0, 0)
-        self._border_color_button = QPushButton()
-        self._border_color_button.setObjectName("border_color_button")
-        self._border_color_button.setFixedWidth(80)
-        self._set_color_button_swatch(self.settings.get("border_color", "#ff9900"))
-        self._border_color_button.clicked.connect(self._pick_border_color)
-        color_layout.addWidget(self._border_color_button)
+        self._paste_lock_border_color_button = QPushButton()
+        self._paste_lock_border_color_button.setObjectName("paste_lock_border_color_button")
+        self._paste_lock_border_color_button.setFixedWidth(80)
+        self._set_color_button_swatch(self.settings.get("paste_lock_border_color", "#ff9900"))
+        self._paste_lock_border_color_button.clicked.connect(self._pick_paste_lock_border_color)
+        color_layout.addWidget(self._paste_lock_border_color_button)
         color_layout.addStretch(1)
         layout.addRow("Border color:", color_row)
 
-        self._border_thickness_spin = QSpinBox()
-        self._border_thickness_spin.setObjectName("border_thickness_spin")
-        self._border_thickness_spin.setRange(1, 10)
-        self._border_thickness_spin.setSuffix(" px")
-        self._border_thickness_spin.setValue(int(self.settings.get("border_thickness", 3)))
-        layout.addRow("Border thickness:", self._border_thickness_spin)
+        self._paste_lock_border_thickness_spin = QSpinBox()
+        self._paste_lock_border_thickness_spin.setObjectName("paste_lock_border_thickness_spin")
+        self._paste_lock_border_thickness_spin.setRange(1, 10)
+        self._paste_lock_border_thickness_spin.setSuffix(" px")
+        self._paste_lock_border_thickness_spin.setValue(int(self.settings.get("paste_lock_border_thickness", 3)))
+        layout.addRow("Border thickness:", self._paste_lock_border_thickness_spin)
 
         self._lock_sounds_check = QCheckBox("Play tone on lock/unlock")
-        self._lock_sounds_check.setObjectName("play_lock_sounds_check")
+        self._lock_sounds_check.setObjectName("paste_lock_play_sounds_check")
         self._lock_sounds_check.setChecked(
-            bool(self.settings.get("play_lock_sounds", True))
+            bool(self.settings.get("paste_lock_play_sounds", True))
         )
         layout.addRow(self._lock_sounds_check)
 
@@ -2684,23 +2684,23 @@ Edit `src/ui/settings_dialog.py` — add a new section method following the exis
         enabled = self._lock_enable_check.isChecked()
         for w in (
             self._lock_hotkey_recorder, self._border_enable_check,
-            self._border_color_button, self._border_thickness_spin,
+            self._paste_lock_border_color_button, self._paste_lock_border_thickness_spin,
             self._lock_sounds_check,
         ):
             w.setEnabled(enabled)
 
     def _set_color_button_swatch(self, color_hex: str) -> None:
-        self._border_color_button.setText(color_hex)
-        self._border_color_button.setStyleSheet(
+        self._paste_lock_border_color_button.setText(color_hex)
+        self._paste_lock_border_color_button.setStyleSheet(
             f"QPushButton {{ background-color: {color_hex}; "
             f"color: {'#000' if QColor(color_hex).lightness() > 128 else '#fff'}; }}"
         )
-        self._pending_border_color = color_hex
+        self._pending_paste_lock_border_color = color_hex
 
-    def _pick_border_color(self) -> None:
+    def _pick_paste_lock_border_color(self) -> None:
         from PyQt6.QtWidgets import QColorDialog
 
-        current = QColor(self.settings.get("border_color", "#ff9900"))
+        current = QColor(self.settings.get("paste_lock_border_color", "#ff9900"))
         chosen = QColorDialog.getColor(current, self, "Choose border color")
         if chosen.isValid():
             self._set_color_button_swatch(chosen.name())
@@ -2715,12 +2715,12 @@ Then in the existing build method, add the new group:
 And in the existing save/accept method, persist the new values:
 
 ```python
-        self.settings.set("paste_target_lock_enabled", self._lock_enable_check.isChecked())
-        self.settings.set("lock_toggle_hotkey", self._lock_hotkey_recorder.hotkey())
-        self.settings.set("border_overlay_enabled", self._border_enable_check.isChecked())
-        self.settings.set("border_color", self._pending_border_color)
-        self.settings.set("border_thickness", self._border_thickness_spin.value())
-        self.settings.set("play_lock_sounds", self._lock_sounds_check.isChecked())
+        self.settings.set("paste_lock_enabled", self._lock_enable_check.isChecked())
+        self.settings.set("paste_lock_hotkey", self._lock_hotkey_recorder.hotkey())
+        self.settings.set("paste_lock_border_enabled", self._border_enable_check.isChecked())
+        self.settings.set("paste_lock_border_color", self._pending_paste_lock_border_color)
+        self.settings.set("paste_lock_border_thickness", self._paste_lock_border_thickness_spin.value())
+        self.settings.set("paste_lock_play_sounds", self._lock_sounds_check.isChecked())
 ```
 
 (The exact method name to add to depends on the existing `accept` / `_save` flow. Read the file first.)
@@ -2752,8 +2752,8 @@ Find `_open_settings` in `src/app.py` and extend the existing dirty-check that r
             or self.settings.get("delete_hotkey") != prev_delete_hotkey
             or self.settings.get("voice_interrupt_hotkey") != prev_voice_hotkey
             or bool(self.settings.get("voice_enabled", False)) != prev_voice_enabled
-            or self.settings.get("lock_toggle_hotkey") != prev_lock_hotkey
-            or bool(self.settings.get("paste_target_lock_enabled", False)) != prev_lock_enabled
+            or self.settings.get("paste_lock_hotkey") != prev_lock_hotkey
+            or bool(self.settings.get("paste_lock_enabled", False)) != prev_lock_enabled
         ):
             self.hotkey.update_mapping(self._build_hotkey_mapping())
             self.tray.set_lock_state(
@@ -2766,8 +2766,8 @@ Find `_open_settings` in `src/app.py` and extend the existing dirty-check that r
 And capture the new previous values at the top of `_open_settings`:
 
 ```python
-        prev_lock_hotkey = self.settings.get("lock_toggle_hotkey")
-        prev_lock_enabled = bool(self.settings.get("paste_target_lock_enabled", False))
+        prev_lock_hotkey = self.settings.get("paste_lock_hotkey")
+        prev_lock_enabled = bool(self.settings.get("paste_lock_enabled", False))
 ```
 
 - [ ] **Step 8: Run full suite**
@@ -2808,7 +2808,7 @@ Expected: `OK`. ImportError here usually means a circular import between `paste_
 
 - [ ] **Step 3: Quick smoke test — does the app start?**
 
-Run: `./venv/Scripts/python.exe -m src` in the foreground. The app should appear in the system tray. Right-click and verify the tray menu — when `paste_target_lock_enabled` is False (default), the new lock section should be hidden.
+Run: `./venv/Scripts/python.exe -m src` in the foreground. The app should appear in the system tray. Right-click and verify the tray menu — when `paste_lock_enabled` is False (default), the new lock section should be hidden.
 
 - [ ] **Step 4: No commit — this is a verification gate.**
 

@@ -117,7 +117,7 @@ This spec defines a **paste target lock** feature: a way to bind dictated output
 - `target_invalid = pyqtSignal(str)` — payload `reason` ∈ `{"closed"}`. (Minimized targets do not emit this — `_paste_text` auto-restores them.)
 
 **Settings consumed:**
-- `paste_target_lock_enabled` (gates everything)
+- `paste_lock_enabled` (gates everything)
 
 ### 5.2 `WindowBorderOverlay(QWidget)` — `src/ui/window_border_overlay.py`
 
@@ -129,9 +129,9 @@ Mirrors the `OscilloscopeWidget` pattern. Frameless, always-on-top, click-throug
 3. Calls `get_window_rect(hwnd)` → repositions/resizes the widget to that rect
 
 **Settings consumed (re-read on `settings.changed`):**
-- `border_overlay_enabled` (master gate; False → always hidden regardless of `set_target_hwnd`)
-- `border_color`
-- `border_thickness`
+- `paste_lock_border_enabled` (master gate; False → always hidden regardless of `set_target_hwnd`)
+- `paste_lock_border_color`
+- `paste_lock_border_thickness`
 
 ### 5.3 `win32_window_utils` — `src/win32_window_utils.py`
 
@@ -163,7 +163,7 @@ When `target_hwnd` is supplied:
 3. Check `is_window(target_hwnd)` and PID match → if either fails, return 0 (caller handles the dead-target notification)
 4. Capture `prev_fg = get_foreground_window()`
 5. If `is_iconic(target_hwnd)`: call `restore_window(target_hwnd)`
-6. Call `set_foreground_with_attach(target_hwnd)`. Sleep `focus_settle_ms` (new setting, default 50 ms). Log warning if the call returned False but proceed anyway.
+6. Call `set_foreground_with_attach(target_hwnd)`. Sleep `paste_lock_focus_settle_ms` (new setting, default 50 ms). Log warning if the call returned False but proceed anyway.
 7. Run existing modifier-clear + Ctrl+V + trailing space
 8. Call `set_foreground_with_attach(prev_fg)` to restore user's focus
 
@@ -177,13 +177,13 @@ def play_lock(self) -> None: ...
 def play_unlock(self) -> None: ...
 ```
 
-Both gated by new setting `play_lock_sounds` (default True). Tones are generated procedurally with numpy via the existing `_make_chime` helper (matches `play_ready`/`play_stop` pattern — no .wav assets). New constants: `LOCK_FREQS = (523.0, 698.0)` (C5→F5, ascending = "lock") and `UNLOCK_FREQS = (698.0, 523.0)` (F5→C5, descending = "unlock"). Reuses the existing playback path.
+Both gated by new setting `paste_lock_play_sounds` (default True). Tones are generated procedurally with numpy via the existing `_make_chime` helper (matches `play_ready`/`play_stop` pattern — no .wav assets). New constants: `LOCK_FREQS = (523.0, 698.0)` (C5→F5, ascending = "lock") and `UNLOCK_FREQS = (698.0, 523.0)` (F5→C5, descending = "unlock"). Reuses the existing playback path.
 
 ### 5.6 `app.py` wiring
 
 Adds:
 - Instantiate `self.paste_target = PasteTargetController(self.settings)`
-- Extend `_build_hotkey_mapping` to include `"lock_toggle": <alt>+l` when `paste_target_lock_enabled`
+- Extend `_build_hotkey_mapping` to include `"lock_toggle": <alt>+l` when `paste_lock_enabled`
 - New `_on_target_invalid(reason)` handler: tray notification + `controller.clear_sticky_silently()`
 - New `_on_lock_changed(hwnd, source)` handler: always refreshes the tray label. If `source == "sticky"`: also `border.set_target_hwnd(hwnd)` and plays a tone with these rules — `sound.play_lock()` when the new sticky hwnd is non-None (covers both fresh-lock and re-target transitions); `sound.play_unlock()` when the new sticky hwnd is None. The handler tracks the previous sticky state internally to make this decision.
 - `_toggle_capture` → call `paste_target.on_dictation_started/stopped` at the right points
@@ -206,7 +206,7 @@ Label rules (driven by smart-toggle semantics):
 - Sticky lock set, current foreground IS the target: *"Unlock paste target (\<title\>)"*
 - Sticky lock set, current foreground is something else: *"Re-lock paste target → current window"*
 
-Hidden entirely when `paste_target_lock_enabled` is False.
+Hidden entirely when `paste_lock_enabled` is False.
 
 Window title for the status line is fetched via `get_window_title(hwnd)`, truncated to 40 chars, cached for 1 second (re-cached on menu open).
 
@@ -216,16 +216,16 @@ New collapsible section *"Paste target lock"* placed after *"Hotkeys"*:
 
 | Control | Type | Setting key | Default |
 |---|---|---|---|
-| Enable paste-target lock | Checkbox | `paste_target_lock_enabled` | False |
-| Lock toggle hotkey | HotkeyRecorder | `lock_toggle_hotkey` | `<alt>+l` |
-| Show border around locked window | Checkbox | `border_overlay_enabled` | True |
-| Border color | QColorDialog button | `border_color` | `#ff9900` |
-| Border thickness | QSpinBox (1–10) | `border_thickness` | 3 |
-| Play tone on lock/unlock | Checkbox | `play_lock_sounds` | True |
+| Enable paste-target lock | Checkbox | `paste_lock_enabled` | False |
+| Lock toggle hotkey | HotkeyRecorder | `paste_lock_hotkey` | `<alt>+l` |
+| Show border around locked window | Checkbox | `paste_lock_border_enabled` | True |
+| Border color | QColorDialog button | `paste_lock_border_color` | `#ff9900` |
+| Border thickness | QSpinBox (1–10) | `paste_lock_border_thickness` | 3 |
+| Play tone on lock/unlock | Checkbox | `paste_lock_play_sounds` | True |
 
 All children disabled when the master enable is unchecked.
 
-`HotkeyRecorder`-recorded `lock_toggle_hotkey` is validated against the existing chords (`hotkey`, `delete_hotkey`, `voice_interrupt_hotkey`) using the same `validate_hotkeys` pattern, extended to include the new key.
+`HotkeyRecorder`-recorded `paste_lock_hotkey` is validated against the existing chords (`hotkey`, `delete_hotkey`, `voice_interrupt_hotkey`) using the same `validate_hotkeys` pattern, extended to include the new key.
 
 ## 6. Data flow (summary)
 
@@ -241,7 +241,7 @@ All children disabled when the master enable is unchecked.
 3. **Foreground change mid-paste:** Single-attempt focus-shift; if Windows refuses or user moves focus, paste lands wherever the user moved focus to (best-effort, no retry).
 4. **HWND reuse:** Detected via PID comparison at `is_target_alive` time; PID drift → treat as closed.
 5. **UAC-elevated target:** UIPI silently blocks `SendInput`. Detected via `set_foreground_with_attach` returning False; one-time tray notification advising elevation.
-6. **Hotkey collisions:** `validate_hotkeys` extended to include `lock_toggle_hotkey` against the three existing chords; same warn/error pattern as today.
+6. **Hotkey collisions:** `validate_hotkeys` extended to include `paste_lock_hotkey` against the three existing chords; same warn/error pattern as today.
 7. **Race: toggle during in-flight paste:** `_paste_text` reads `target_hwnd` once at entry; in-flight paste completes against captured target. Next paste picks up the new state.
 8. **Stale self-window HWND at paste time:** `_paste_text` re-checks PID; mismatch → treat as closed.
 
@@ -249,13 +249,13 @@ All children disabled when the master enable is unchecked.
 
 ```python
 # Added to DEFAULT_CONFIG:
-"paste_target_lock_enabled": False,
-"lock_toggle_hotkey": "<alt>+l",
-"border_overlay_enabled": True,
-"border_color": "#ff9900",
-"border_thickness": 3,
-"play_lock_sounds": True,
-"focus_settle_ms": 50,
+"paste_lock_enabled": False,
+"paste_lock_hotkey": "<alt>+l",
+"paste_lock_border_enabled": True,
+"paste_lock_border_color": "#ff9900",
+"paste_lock_border_thickness": 3,
+"paste_lock_play_sounds": True,
+"paste_lock_focus_settle_ms": 50,
 ```
 
 The existing `_deep_merge` merges these into any pre-existing user config without clobbering anything.
