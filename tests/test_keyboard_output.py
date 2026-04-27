@@ -87,6 +87,80 @@ def test_per_character_typing_when_delay_set(tmp_appdata):
     assert typed == 3
 
 
+def test_wait_for_modifier_release_clean(tmp_appdata):
+    """When no modifier is held, the wait returns immediately (True)."""
+    from src import keyboard_output as ko
+
+    with patch.object(ko, "_user_modifier_held", return_value=False):
+        assert ko._wait_for_user_modifier_release(timeout_ms=500) is True
+
+
+def test_wait_for_modifier_release_times_out(tmp_appdata):
+    """If the user keeps Alt held, the wait gives up at the deadline (False)."""
+    from src import keyboard_output as ko
+
+    with patch.object(ko, "_user_modifier_held", return_value=True):
+        t0 = __import__("time").monotonic()
+        result = ko._wait_for_user_modifier_release(timeout_ms=30, poll_ms=5)
+        elapsed = __import__("time").monotonic() - t0
+    assert result is False
+    # Loose bound — we just want to confirm it actually waited, not raced past.
+    assert elapsed >= 0.025
+
+
+def test_wait_for_modifier_release_returns_when_user_lifts(tmp_appdata):
+    """Held at first, released mid-poll → returns True before the deadline."""
+    from src import keyboard_output as ko
+
+    states = iter([True, True, False, False])
+    with patch.object(ko, "_user_modifier_held", side_effect=lambda: next(states)):
+        assert ko._wait_for_user_modifier_release(timeout_ms=500, poll_ms=5) is True
+
+
+def test_paste_waits_for_modifier_release_before_ctrl_v(tmp_appdata, qapp):
+    """The paste path must consult the modifier-release guard before pressing
+    Ctrl, so user-held Alt doesn't poison the chord into Ctrl+Alt+V."""
+    from src import keyboard_output as ko
+
+    sm = SettingsManager()
+    sm.set("output_method", "paste")
+    sm.set("paste_settle_ms", 0)
+    sm.set("paste_modifier_clear_ms", 50)
+    with patch("src.keyboard_output.Controller") as ctrl_cls, patch.object(
+        ko, "_wait_for_user_modifier_release", return_value=True
+    ) as wait:
+        ctrl_cls.return_value = MagicMock()
+        kb = KeyboardOutput(sm)
+        kb.type_text("hello")
+    wait.assert_called_once_with(50)
+
+
+def test_paste_proceeds_even_if_modifier_wait_times_out(tmp_appdata, qapp, caplog):
+    """If the user just won't let go, we still send Ctrl+V (better best-effort
+    than dropping the paste entirely) and log a warning so the failure is
+    diagnosable."""
+    import logging
+
+    from pynput.keyboard import Key
+
+    from src import keyboard_output as ko
+
+    sm = SettingsManager()
+    sm.set("output_method", "paste")
+    sm.set("paste_settle_ms", 0)
+    sm.set("paste_modifier_clear_ms", 5)
+    with patch("src.keyboard_output.Controller") as ctrl_cls, patch.object(
+        ko, "_wait_for_user_modifier_release", return_value=False
+    ), caplog.at_level(logging.WARNING):
+        ctrl_cls.return_value = MagicMock()
+        kb = KeyboardOutput(sm)
+        mock = kb._kb
+        kb.type_text("hello")
+    presses = [c.args[0] for c in mock.press.call_args_list]
+    assert Key.ctrl in presses and "v" in presses
+    assert any("Alt/Shift/Win" in r.message for r in caplog.records)
+
+
 def test_paste_mode_clipboard_has_no_trailing_space(tmp_appdata, qapp):
     """Trailing space is NOT in the clipboard — terminals strip it.
     A real Key.space keystroke is injected separately for the separator.

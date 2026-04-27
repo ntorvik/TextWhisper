@@ -62,6 +62,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "trailing_space": True,
     "output_method": "type",  # "type" — char-by-char typing; "paste" — clipboard + Ctrl+V
     "paste_settle_ms": 30,    # short pause before Ctrl+V so the clipboard is ready
+    # Max time to wait for the user to release Alt/Shift/Win before pressing
+    # Ctrl+V. Guards against the toggle-hotkey-residue race where Alt is still
+    # held when transcription completes, turning Ctrl+V into Ctrl+Alt+V.
+    "paste_modifier_clear_ms": 250,
     "oscilloscope": {
         "enabled": True,
         "x": None,

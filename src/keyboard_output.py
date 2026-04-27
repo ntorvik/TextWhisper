@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import time
 
@@ -20,6 +21,49 @@ _VK_FOR_WHITESPACE: dict[str, Key] = {
     "\n": Key.enter,
     "\t": Key.tab,
 }
+
+
+# Win32 virtual-key codes for modifiers we never want to be pressed when we
+# inject Ctrl+V. ALT, SHIFT, the two WIN keys. Polled via GetAsyncKeyState.
+_MODIFIER_VKS: tuple[int, ...] = (0x12, 0x10, 0x5B, 0x5C)
+_KEY_DOWN_BIT = 0x8000
+
+
+def _user_modifier_held() -> bool:
+    """True iff the user is physically holding Alt/Shift/Win right now.
+
+    Returns False on non-Windows platforms (the modifier-residue race this
+    guards against is a Windows SendInput timing issue; other backends can
+    extend if needed).
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+
+        get_state = ctypes.windll.user32.GetAsyncKeyState
+        return any(get_state(vk) & _KEY_DOWN_BIT for vk in _MODIFIER_VKS)
+    except Exception:
+        # If we can't query, assume clean — the worst case is the existing
+        # buggy behavior, not a regression.
+        return False
+
+
+def _wait_for_user_modifier_release(timeout_ms: int, poll_ms: int = 10) -> bool:
+    """Block up to ``timeout_ms`` for the user to release Alt/Shift/Win.
+
+    Returns True if all are released within the window, False on timeout.
+    Caller can proceed regardless — the wait is best-effort.
+    """
+    if timeout_ms <= 0 or not _user_modifier_held():
+        return True
+    deadline = time.monotonic() + (timeout_ms / 1000.0)
+    sleep_s = max(0.001, poll_ms / 1000.0)
+    while time.monotonic() < deadline:
+        time.sleep(sleep_s)
+        if not _user_modifier_held():
+            return True
+    return False
 
 
 class KeyboardOutput:
@@ -86,6 +130,12 @@ class KeyboardOutput:
         space out of the clipboard payload and instead inject a real
         ``Key.space`` keystroke immediately after the paste. Real keypresses
         are not subject to the same stripping.
+
+        Modifier-residue guard: if the user is still physically holding the
+        Alt key from a recent toggle-hotkey press (e.g. they hit Alt+Z to stop
+        dictation and walked attention away before lifting Alt), our Ctrl+V
+        becomes Ctrl+Alt+V — which most apps treat as a different shortcut or
+        no-op. We briefly wait for them to release before pressing Ctrl.
         """
         from PyQt6.QtWidgets import QApplication
 
@@ -99,6 +149,14 @@ class KeyboardOutput:
         settle = max(0, int(self.settings.get("paste_settle_ms", 30))) / 1000.0
         if settle > 0:
             time.sleep(settle)
+
+        mod_clear_ms = max(0, int(self.settings.get("paste_modifier_clear_ms", 250)))
+        if not _wait_for_user_modifier_release(mod_clear_ms):
+            log.warning(
+                "Paste: user-held Alt/Shift/Win still down after %d ms — "
+                "Ctrl+V may be misinterpreted by the focused window.",
+                mod_clear_ms,
+            )
 
         sent = 0
         with self._lock:
