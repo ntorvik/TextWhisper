@@ -39,7 +39,7 @@ class TextWhisperApp(QObject):
         self.sound_player = SoundPlayer(self.settings)
         self.hotkey = HotkeyManager(self._build_hotkey_mapping())
 
-        self.tray = TrayController(parent=self)
+        self.tray = TrayController(parent=self, settings=self.settings)
         self.oscilloscope = OscilloscopeWidget(self.settings)
         self.tts = TTSService(self.settings)
         self.summarizer = Summarizer(self.settings)
@@ -247,6 +247,7 @@ class TextWhisperApp(QObject):
         self.tray.toggle_auto_enter.connect(self._toggle_auto_enter)
         self.tray.toggle_voice.connect(self._toggle_voice)
         self.tray.interrupt_voice.connect(self._interrupt_voice)
+        self.tray.toggle_lock.connect(self.paste_target.toggle_sticky)
         self.tray.quit_requested.connect(self.quit)
 
         # TTS lifecycle drives the tray's "Stop Reading" enable state so a
@@ -688,13 +689,17 @@ class TextWhisperApp(QObject):
     def _on_lock_changed(self, hwnd, source: str) -> None:
         """Tray + border + sound updates triggered by the controller.
 
+        - Tray label always refreshes regardless of source (per spec §5.7).
         - source == "sticky": updates border overlay + plays lock/unlock
           tone based on whether the new sticky hwnd is set or cleared
           (compared against the locally-tracked previous state).
-        - source == "session": no border, no sound (per-session is silent).
+        - source == "session": tray-only — no border, no sound (per-session
+          is silent).
         - source == "none": hides border; plays unlock tone iff previous
           state was sticky (handles silent-clear from target_invalid).
         """
+        # Tray label always refreshes regardless of source.
+        self.tray.set_lock_state(hwnd, source)
         if source == "sticky":
             new_hwnd = hwnd if hwnd is not None else None
             self.border_overlay.set_target_hwnd(new_hwnd)
@@ -708,8 +713,7 @@ class TextWhisperApp(QObject):
             if self._last_sticky_hwnd is not None:
                 self.sound_player.play_unlock()
                 self._last_sticky_hwnd = None
-        # source == "session": no border, no sound; tray label refresh
-        # follows in Task 16.
+        # source == "session": tray-only, no border/sound (handled above).
 
     def _on_target_invalid(self, reason: str) -> None:
         """Locked target window has gone — notify and clear silently."""

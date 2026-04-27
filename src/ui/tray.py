@@ -7,6 +7,7 @@ from PyQt6.QtGui import QAction, QBrush, QColor, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QMenu, QSystemTrayIcon
 
 from .. import __version__
+from .. import win32_window_utils as win32
 
 
 def _build_icon(active: bool) -> QIcon:
@@ -43,10 +44,20 @@ class TrayController(QObject):
     toggle_auto_enter = pyqtSignal()
     toggle_voice = pyqtSignal()
     interrupt_voice = pyqtSignal()
+    toggle_lock = pyqtSignal()
     quit_requested = pyqtSignal()
 
-    def __init__(self, parent: QObject | None = None) -> None:
+    def __init__(self, parent: QObject | None = None, settings=None) -> None:
         super().__init__(parent)
+        self.settings = settings
+        self._current_target_hwnd: int | None = None
+        self._current_source: str = "none"
+        # Foreground hwnd + target title captured at set_lock_state() time.
+        # Cached so the label semantics (Lock vs Unlock vs Re-lock) reflect
+        # the moment the state was set, not whatever is focused later, and
+        # so we don't repeatedly hit Win32 just to repaint the menu.
+        self._current_foreground_hwnd: int = 0
+        self._current_target_title: str = ""
         self.tray = QSystemTrayIcon(parent)
         self.tray.setIcon(_build_icon(False))
         self.tray.setToolTip(f"TextWhisper v{__version__} - Idle")
@@ -71,6 +82,14 @@ class TrayController(QObject):
         menu.addSeparator()
         menu.addAction(self.action_oscilloscope)
         menu.addAction(self.action_auto_enter)
+        # --- Paste target lock section ---
+        self._lock_separator_top = menu.addSeparator()
+        self._lock_status_action = menu.addAction("Paste target: <none>")
+        self._lock_status_action.setEnabled(False)  # non-clickable status line
+        self._lock_toggle_action = menu.addAction("Lock paste target → current window")
+        self._lock_toggle_action.triggered.connect(self.toggle_lock.emit)
+        self._lock_separator_bottom = menu.addSeparator()
+        # --- end lock section ---
         menu.addAction(self.action_voice)
         menu.addAction(self.action_voice_interrupt)
         menu.addAction(self.action_settings)
@@ -89,6 +108,7 @@ class TrayController(QObject):
         self.action_quit.triggered.connect(self.quit_requested)
 
         self.tray.activated.connect(self._on_activated)
+        self._refresh_lock_visibility()
         self.tray.show()
 
     def _on_activated(self, reason) -> None:
@@ -134,3 +154,56 @@ class TrayController(QObject):
             else QSystemTrayIcon.MessageIcon.Information
         )
         self.tray.showMessage(title, message, icon, 3000)
+
+    # --- paste-target lock surfacing ----------------------------------
+
+    def set_lock_state(self, hwnd, source: str) -> None:
+        self._current_target_hwnd = hwnd
+        self._current_source = source
+        # Snapshot foreground + title at the moment the state changes.
+        # _lock_action_label / _lock_status_label consume these rather than
+        # re-querying so labels stay consistent between when the menu was
+        # last refreshed and when it's read.
+        self._current_foreground_hwnd = win32.get_foreground_window()
+        self._current_target_title = (
+            win32.get_window_title(hwnd) if hwnd is not None else ""
+        )
+        self._refresh_lock_visibility()
+        if hasattr(self, "_lock_status_action"):
+            self._lock_status_action.setText(self._lock_status_label())
+            self._lock_toggle_action.setText(self._lock_action_label())
+
+    def _lock_section_visible(self) -> bool:
+        if self.settings is None:
+            return False
+        return bool(self.settings.get("paste_lock_enabled", False))
+
+    def _refresh_lock_visibility(self) -> None:
+        visible = self._lock_section_visible()
+        for attr in (
+            "_lock_separator_top", "_lock_status_action",
+            "_lock_toggle_action", "_lock_separator_bottom",
+        ):
+            if hasattr(self, attr):
+                getattr(self, attr).setVisible(visible)
+
+    def _lock_status_label(self) -> str:
+        hwnd = self._current_target_hwnd
+        if hwnd is None:
+            return "Paste target: <none>"
+        title = self._current_target_title or f"hwnd={hwnd}"
+        if len(title) > 40:
+            title = title[:37] + "..."
+        suffix = " (sticky)" if self._current_source == "sticky" else ""
+        return f"Paste target: {title}{suffix}"
+
+    def _lock_action_label(self) -> str:
+        hwnd = self._current_target_hwnd
+        if hwnd is None or self._current_source != "sticky":
+            return "Lock paste target → current window"
+        title = self._current_target_title or f"hwnd={hwnd}"
+        if len(title) > 30:
+            title = title[:27] + "..."
+        if self._current_foreground_hwnd == hwnd:
+            return f"Unlock paste target ({title})"
+        return f"Re-lock paste target → current window"
