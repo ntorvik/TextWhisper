@@ -164,10 +164,15 @@ def parse_hotkey_to_keys(hotkey: str) -> list:
     return out
 
 
-def validate_hotkeys(toggle: str, delete: str) -> list[tuple[str, str]]:
+def validate_hotkeys(
+    toggle: str,
+    delete: str,
+    lock_toggle: str | None = None,
+) -> list[tuple[str, str]]:
     issues: list[tuple[str, str]] = []
     toggle_n = normalize_hotkey(toggle)
     delete_n = normalize_hotkey(delete)
+    lock_n = normalize_hotkey(lock_toggle or "")
 
     if not toggle_n:
         issues.append(("error", "Dictation hotkey is empty."))
@@ -180,6 +185,18 @@ def validate_hotkeys(toggle: str, delete: str) -> list[tuple[str, str]]:
                       "Pick a different one for delete-word.")
         )
 
+    if lock_n:
+        if lock_n == toggle_n:
+            issues.append(
+                ("error", f"Lock-toggle hotkey ({lock_n}) collides with the "
+                          "dictation toggle. Pick a different chord.")
+            )
+        if lock_n == delete_n:
+            issues.append(
+                ("error", f"Lock-toggle hotkey ({lock_n}) collides with the "
+                          "delete-word hotkey. Pick a different chord.")
+            )
+
     if toggle_n and not has_modifier(toggle):
         issues.append(
             ("warn", f"Dictation hotkey {toggle_n!r} has no modifier — pressing that "
@@ -190,6 +207,11 @@ def validate_hotkeys(toggle: str, delete: str) -> list[tuple[str, str]]:
             ("warn", f"Delete-word hotkey {delete_n!r} has no modifier — it will fire "
                      "globally and conflict with the key's normal function. "
                      "Consider <ctrl>+<backspace>.")
+        )
+    if lock_toggle and lock_n and not has_modifier(lock_toggle):
+        issues.append(
+            ("warn", f"Lock-toggle hotkey {lock_n!r} has no modifier — it will fire "
+                     "globally and conflict with the key's normal function.")
         )
     return issues
 

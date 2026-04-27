@@ -98,3 +98,48 @@ def test_plus_key_passes_validation():
 def test_ctrl_plus_passes_validation_clean():
     # Ctrl+Plus is a well-formed chord with a modifier and shouldn't warn.
     assert validate_hotkeys("<alt>+z", "<ctrl>+<plus>") == []
+
+
+def test_validate_includes_lock_toggle_collision_with_toggle():
+    from src.hotkey_manager import validate_hotkeys
+
+    issues = validate_hotkeys(
+        toggle="<alt>+z",
+        delete="<delete>",
+        lock_toggle="<alt>+z",
+    )
+    severities = [s for s, _ in issues]
+    assert "error" in severities
+
+
+def test_validate_includes_lock_toggle_collision_with_delete():
+    from src.hotkey_manager import validate_hotkeys
+
+    issues = validate_hotkeys(
+        toggle="<alt>+z",
+        delete="<delete>",
+        lock_toggle="<delete>",
+    )
+    assert any("error" == s for s, _ in issues)
+
+
+def test_validate_lock_toggle_unique_no_error():
+    from src.hotkey_manager import validate_hotkeys
+
+    issues = validate_hotkeys(
+        toggle="<alt>+z",
+        delete="<delete>",
+        lock_toggle="<alt>+l",
+    )
+    assert all(s != "error" for s, _ in issues)
+
+
+def test_validate_lock_toggle_no_modifier_warns():
+    from src.hotkey_manager import validate_hotkeys
+
+    issues = validate_hotkeys(
+        toggle="<alt>+z",
+        delete="<delete>",
+        lock_toggle="l",
+    )
+    assert any(s == "warn" for s, _ in issues)
