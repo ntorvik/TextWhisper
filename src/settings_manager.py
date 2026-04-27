@@ -66,6 +66,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Ctrl+V. Guards against the toggle-hotkey-residue race where Alt is still
     # held when transcription completes, turning Ctrl+V into Ctrl+Alt+V.
     "paste_modifier_clear_ms": 250,
+    # ---- Paste target lock ----------------------------------------
+    # See docs/superpowers/specs/2026-04-27-paste-target-lock-design.md
+    "paste_lock_enabled": False,
+    "paste_lock_hotkey": "<alt>+l",
+    "paste_lock_border_enabled": True,
+    "paste_lock_border_color": "#ff9900",
+    "paste_lock_border_thickness": 3,
+    "paste_lock_play_sounds": True,
+    "paste_lock_focus_settle_ms": 50,
     "oscilloscope": {
         "enabled": True,
         "x": None,

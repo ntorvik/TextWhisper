@@ -228,7 +228,7 @@ def test_transcription_pushes_to_history_and_copies_clipboard(app):
 
     with patch.object(app.keyboard_out, "type_text", return_value=12) as tt:
         app._on_transcription("hello world")
-        tt.assert_called_once_with("hello world")
+        tt.assert_called_once_with("hello world", target_hwnd=None)
     assert app._typed_history == [12]
     assert app._last_typed_text == "hello world"
     assert QApplication.clipboard().text() == "hello world"
@@ -550,7 +550,7 @@ def test_continuation_pending_lowercases_next_segment(app):
     app._user_is_speaking = False
     with patch.object(app.keyboard_out, "type_text", return_value=10) as t:
         app._on_transcription("World today")
-    t.assert_called_once_with("world today")
+    t.assert_called_once_with("world today", target_hwnd=None)
     assert app._continuation_pending is False
 
 
@@ -560,7 +560,7 @@ def test_continuation_pending_skipped_when_disabled(app):
     app._continuation_pending = True
     with patch.object(app.keyboard_out, "type_text", return_value=10) as t:
         app._on_transcription("World today")
-    t.assert_called_once_with("World today")  # untouched
+    t.assert_called_once_with("World today", target_hwnd=None)  # untouched
 
 
 def test_in_text_demote_when_user_still_speaking(app):
@@ -572,7 +572,7 @@ def test_in_text_demote_when_user_still_speaking(app):
     app._continuation_pending = False
     with patch.object(app.keyboard_out, "type_text", return_value=10) as t:
         app._on_transcription("Hello world.")
-    t.assert_called_once_with("Hello world,")
+    t.assert_called_once_with("Hello world,", target_hwnd=None)
     assert app._continuation_pending is True
 
 
@@ -583,7 +583,7 @@ def test_ellipsis_not_demoted(app):
     app._user_is_speaking = True
     with patch.object(app.keyboard_out, "type_text", return_value=10) as t:
         app._on_transcription("Wait...")
-    t.assert_called_once_with("Wait...")  # untouched
+    t.assert_called_once_with("Wait...", target_hwnd=None)  # untouched
 
 
 def test_question_mark_not_demoted(app):
@@ -592,7 +592,7 @@ def test_question_mark_not_demoted(app):
     app._user_is_speaking = True
     with patch.object(app.keyboard_out, "type_text", return_value=10) as t:
         app._on_transcription("Really?")
-    t.assert_called_once_with("Really?")
+    t.assert_called_once_with("Really?", target_hwnd=None)
 
 
 def test_last_segment_period_flag_tracked_across_transcriptions(app):
@@ -747,7 +747,7 @@ def test_full_continuation_flow_end_to_end(app):
     # Segment #2 typed — first letter lowercased due to continuation.
     with patch.object(app.keyboard_out, "type_text", return_value=10) as t:
         app._on_transcription("But I changed my mind.")
-    t.assert_called_once_with("but I changed my mind.")
+    t.assert_called_once_with("but I changed my mind.", target_hwnd=None)
     assert app._continuation_pending is False
     assert app._last_segment_ended_with_period is True
 
@@ -760,3 +760,117 @@ def test_transcription_skips_clipboard_when_disabled(app):
     with patch.object(app.keyboard_out, "type_text", return_value=4):
         app._on_transcription("test")
     assert QApplication.clipboard().text() == "preexisting"
+
+
+# --- Paste-target lock wiring -------------------------------------------
+
+def test_lock_toggle_hotkey_in_mapping_only_when_enabled(app):
+    app.settings.set("paste_lock_enabled", False)
+    assert "lock_toggle" not in app._build_hotkey_mapping()
+
+    app.settings.set("paste_lock_enabled", True)
+    assert app._build_hotkey_mapping().get("lock_toggle") == "<alt>+l"
+
+
+def test_lock_toggle_hotkey_dropped_when_clashes(app):
+    app.settings.set("paste_lock_enabled", True)
+    app.settings.set("hotkey", "<alt>+z")
+    app.settings.set("delete_hotkey", "<delete>")
+    app.settings.set("paste_lock_hotkey", "<alt>+z")
+    assert "lock_toggle" not in app._build_hotkey_mapping()
+    app.settings.set("paste_lock_hotkey", "<delete>")
+    assert "lock_toggle" not in app._build_hotkey_mapping()
+    app.settings.set("paste_lock_hotkey", "<alt>+l")
+    assert "lock_toggle" in app._build_hotkey_mapping()
+
+
+def test_open_mic_stream_calls_paste_target_on_dictation_started(app):
+    """_open_mic_stream is the actual capture-start point (start_capture
+    defers to it via QTimer when ready chime is enabled)."""
+    with patch.object(app.audio, "start"), \
+         patch.object(app.paste_target, "on_dictation_started") as ds:
+        app._open_mic_stream()
+    ds.assert_called_once()
+
+
+def test_stop_capture_calls_paste_target_on_dictation_stopped(app):
+    app._is_capturing = True
+    with patch.object(app.audio, "stop"), \
+         patch.object(app.sound_player, "play_stop"), \
+         patch.object(app.paste_target, "on_dictation_stopped") as ds:
+        app._stop_capture()
+    ds.assert_called_once()
+
+
+def test_lock_toggle_hotkey_calls_controller_toggle(app):
+    with patch.object(app.paste_target, "toggle_sticky") as t:
+        app._on_hotkey_triggered("lock_toggle")
+    t.assert_called_once()
+
+
+def test_transcription_passes_target_hwnd_when_locked(app):
+    """current_target() result is forwarded into keyboard_out.type_text."""
+    app.settings.set("paste_lock_enabled", True)
+    app.paste_target._sticky_hwnd = 4242
+    with patch.object(app.keyboard_out, "type_text", return_value=10) as tt:
+        app._on_transcription("hello")
+    tt.assert_called_once()
+    target = tt.call_args.kwargs.get("target_hwnd")
+    if target is None and len(tt.call_args.args) >= 2:
+        target = tt.call_args.args[1]
+    assert target == 4242
+
+
+def test_transcription_passes_none_when_no_lock(app):
+    app.settings.set("paste_lock_enabled", True)
+    with patch.object(app.keyboard_out, "type_text", return_value=10) as tt:
+        app._on_transcription("hello")
+    target = tt.call_args.kwargs.get("target_hwnd")
+    if target is None and len(tt.call_args.args) >= 2:
+        target = tt.call_args.args[1]
+    assert target is None
+
+
+def test_lock_changed_sticky_to_hwnd_shows_border_and_plays_lock(app):
+    app.settings.set("paste_lock_enabled", True)
+    with patch.object(app.border_overlay, "set_target_hwnd") as bord, \
+         patch.object(app.sound_player, "play_lock") as plk, \
+         patch.object(app.sound_player, "play_unlock") as pul:
+        app._on_lock_changed(4242, "sticky")
+    bord.assert_called_once_with(4242)
+    plk.assert_called_once()
+    pul.assert_not_called()
+
+
+def test_lock_changed_sticky_to_none_hides_border_and_plays_unlock(app):
+    app.settings.set("paste_lock_enabled", True)
+    app._last_sticky_hwnd = 4242
+    with patch.object(app.border_overlay, "set_target_hwnd") as bord, \
+         patch.object(app.sound_player, "play_lock") as plk, \
+         patch.object(app.sound_player, "play_unlock") as pul:
+        app._on_lock_changed(None, "none")
+    bord.assert_called_once_with(None)
+    pul.assert_called_once()
+    plk.assert_not_called()
+
+
+def test_lock_changed_session_does_not_touch_border_or_sound(app):
+    """Per-session captures are silent and borderless."""
+    app.settings.set("paste_lock_enabled", True)
+    with patch.object(app.border_overlay, "set_target_hwnd") as bord, \
+         patch.object(app.sound_player, "play_lock") as plk, \
+         patch.object(app.sound_player, "play_unlock") as pul:
+        app._on_lock_changed(99, "session")
+    bord.assert_not_called()
+    plk.assert_not_called()
+    pul.assert_not_called()
+
+
+def test_target_invalid_closed_notifies_and_clears_silently(app):
+    app.settings.set("notifications_enabled", True)
+    app.paste_target._sticky_hwnd = 4242
+    with patch.object(app.tray, "notify") as n, \
+         patch.object(app.paste_target, "clear_sticky_silently") as cs:
+        app._on_target_invalid("closed")
+    n.assert_called_once()
+    cs.assert_called_once()
