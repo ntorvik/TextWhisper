@@ -42,6 +42,8 @@ class SoundPlayer:
 
     READY_FREQS = (659.0, 784.0)   # E5 → G5  (ascending = "ready")
     STOP_FREQS = (784.0, 659.0)    # G5 → E5  (descending = "stopped")
+    LOCK_FREQS = (523.0, 698.0)    # C5 → F5  (ascending = "lock")
+    UNLOCK_FREQS = (698.0, 523.0)  # F5 → C5  (descending = "unlock")
 
     def __init__(self, settings) -> None:
         self.settings = settings
@@ -49,6 +51,8 @@ class SoundPlayer:
         self._cached_volume: float | None = None
         self._ready: np.ndarray = np.zeros(0, dtype=np.float32)
         self._stop: np.ndarray = np.zeros(0, dtype=np.float32)
+        self._lock_chime: np.ndarray = np.zeros(0, dtype=np.float32)
+        self._unlock_chime: np.ndarray = np.zeros(0, dtype=np.float32)
         self._rebuild_if_volume_changed()
 
     @property
@@ -62,6 +66,8 @@ class SoundPlayer:
             self._cached_volume = v
             self._ready = _make_chime(list(self.READY_FREQS), v)
             self._stop = _make_chime(list(self.STOP_FREQS), v)
+            self._lock_chime = _make_chime(list(self.LOCK_FREQS), v)
+            self._unlock_chime = _make_chime(list(self.UNLOCK_FREQS), v)
 
     def play_ready(self) -> None:
         if not bool(self.settings.get("play_ready_sound", True)):
@@ -74,6 +80,18 @@ class SoundPlayer:
             return
         self._rebuild_if_volume_changed()
         self._play(self._stop)
+
+    def play_lock(self) -> None:
+        if not bool(self.settings.get("paste_lock_play_sounds", True)):
+            return
+        self._rebuild_if_volume_changed()
+        self._play(self._lock_chime)
+
+    def play_unlock(self) -> None:
+        if not bool(self.settings.get("paste_lock_play_sounds", True)):
+            return
+        self._rebuild_if_volume_changed()
+        self._play(self._unlock_chime)
 
     def _play(self, samples: np.ndarray) -> None:
         if samples.size == 0:

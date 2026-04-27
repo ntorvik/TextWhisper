@@ -99,3 +99,31 @@ def test_ready_duration_is_positive(tmp_appdata):
     sm = SettingsManager()
     sp = SoundPlayer(sm)
     assert sp.ready_duration_ms > 0
+
+
+def test_play_lock_calls_sd_play_when_enabled(tmp_appdata):
+    sm = SettingsManager()
+    sm.set("paste_lock_play_sounds", True)
+    sp = SoundPlayer(sm)
+    with patch("src.sound_player.sd.play") as p:
+        sp.play_lock()
+        p.assert_called_once()
+
+
+def test_play_lock_skipped_when_disabled(tmp_appdata):
+    sm = SettingsManager()
+    sm.set("paste_lock_play_sounds", False)
+    sp = SoundPlayer(sm)
+    with patch("src.sound_player.sd.play") as p:
+        sp.play_lock()
+        sp.play_unlock()
+        p.assert_not_called()
+
+
+def test_play_unlock_calls_sd_play_when_enabled(tmp_appdata):
+    sm = SettingsManager()
+    sm.set("paste_lock_play_sounds", True)
+    sp = SoundPlayer(sm)
+    with patch("src.sound_player.sd.play") as p:
+        sp.play_unlock()
+        p.assert_called_once()
