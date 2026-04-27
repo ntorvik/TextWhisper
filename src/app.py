@@ -21,6 +21,8 @@ from .ui.settings_dialog import SettingsDialog
 from .ui.tray import TrayController
 from .voice import TTSService
 from .voice_server import VoiceIPCServer
+from .paste_target import PasteTargetController
+from .ui.window_border_overlay import WindowBorderOverlay
 
 log = logging.getLogger(__name__)
 
@@ -34,7 +36,6 @@ class TextWhisperApp(QObject):
 
         self.audio = AudioCapture(self.settings)
         self.engine = TranscriptionEngine(self.settings)
-        self.keyboard_out = KeyboardOutput(self.settings)
         self.sound_player = SoundPlayer(self.settings)
         self.hotkey = HotkeyManager(self._build_hotkey_mapping())
 
@@ -43,6 +44,17 @@ class TextWhisperApp(QObject):
         self.tts = TTSService(self.settings)
         self.summarizer = Summarizer(self.settings)
         self.voice_ipc = VoiceIPCServer(self.settings, self.tts, self.summarizer)
+        self.paste_target = PasteTargetController(self.settings)
+        self.border_overlay = WindowBorderOverlay(self.settings)
+        self._last_sticky_hwnd: int | None = None
+        # KeyboardOutput needs paste_target to exist for its
+        # on_target_invalid callback (the controller emits target_invalid
+        # via signal, but KeyboardOutput is callback-driven to stay free
+        # of QObject inheritance).
+        self.keyboard_out = KeyboardOutput(
+            self.settings,
+            on_target_invalid=self.paste_target.target_invalid.emit,
+        )
 
         self._is_capturing = False
         self._model_loaded = False
@@ -194,6 +206,16 @@ class TextWhisperApp(QObject):
             ).strip()
             if voice_hk and voice_hk not in (toggle, delete_hk):
                 m["voice_interrupt"] = voice_hk
+        # Paste-target-lock toggle (Alt+L by default). Only registered when
+        # the feature is enabled AND the chord doesn't collide with any of
+        # the others (toggle/delete/voice_interrupt).
+        if bool(self.settings.get("paste_lock_enabled", False)):
+            lock_hk = str(
+                self.settings.get("paste_lock_hotkey", "<alt>+l") or ""
+            ).strip()
+            existing = {toggle, delete_hk, m.get("voice_interrupt", "")}
+            if lock_hk and lock_hk not in existing:
+                m["lock_toggle"] = lock_hk
         return m
 
     def _wire_signals(self) -> None:
@@ -236,6 +258,9 @@ class TextWhisperApp(QObject):
             lambda: self.tray.set_voice_speaking(False)
         )
 
+        self.paste_target.lock_changed.connect(self._on_lock_changed)
+        self.paste_target.target_invalid.connect(self._on_target_invalid)
+
     # --- capture control -----------------------------------------------
 
     def _toggle_capture(self) -> None:
@@ -267,6 +292,7 @@ class TextWhisperApp(QObject):
             QMessageBox.warning(None, "TextWhisper", f"Could not start microphone: {e}")
             return
         self._is_capturing = True
+        self.paste_target.on_dictation_started()
         self.tray.set_active(True)
         self.oscilloscope.set_active(True)
 
@@ -290,6 +316,7 @@ class TextWhisperApp(QObject):
             self._delete_timer.stop()
         self._delete_pending = False
         self._extra_chars_typed_by_hotkey = 0
+        self.paste_target.on_dictation_stopped()
         self.tray.set_active(False)
         self.oscilloscope.set_active(False)
         self.oscilloscope.clear()
@@ -432,6 +459,8 @@ class TextWhisperApp(QObject):
             self._on_delete_pressed()
         elif name == "voice_interrupt":
             self.tts.interrupt()
+        elif name == "lock_toggle":
+            self.paste_target.toggle_sticky()
         else:
             log.warning("Unknown hotkey: %s", name)
 
@@ -526,7 +555,8 @@ class TextWhisperApp(QObject):
             self._continuation_pending = True
             log.info("Continuation in-text — segment '.' demoted before typing.")
 
-        typed = self.keyboard_out.type_text(text)
+        target_hwnd = self.paste_target.current_target()
+        typed = self.keyboard_out.type_text(text, target_hwnd=target_hwnd)
         if typed > 0:
             self._typed_history.append(typed)
             if len(self._typed_history) > self._typed_history_max:
@@ -652,6 +682,44 @@ class TextWhisperApp(QObject):
     def _ends_with_single_period(text: str) -> bool:
         """True iff ``text`` ends with exactly one '.', not '..' or '...'."""
         return text.endswith(".") and not text.endswith("..")
+
+    # --- paste-target lock signal handlers ----------------------------
+
+    def _on_lock_changed(self, hwnd, source: str) -> None:
+        """Tray + border + sound updates triggered by the controller.
+
+        - source == "sticky": updates border overlay + plays lock/unlock
+          tone based on whether the new sticky hwnd is set or cleared
+          (compared against the locally-tracked previous state).
+        - source == "session": no border, no sound (per-session is silent).
+        - source == "none": hides border; plays unlock tone iff previous
+          state was sticky (handles silent-clear from target_invalid).
+        """
+        if source == "sticky":
+            new_hwnd = hwnd if hwnd is not None else None
+            self.border_overlay.set_target_hwnd(new_hwnd)
+            if new_hwnd is not None and self._last_sticky_hwnd != new_hwnd:
+                self.sound_player.play_lock()
+            elif new_hwnd is None and self._last_sticky_hwnd is not None:
+                self.sound_player.play_unlock()
+            self._last_sticky_hwnd = new_hwnd
+        elif source == "none":
+            self.border_overlay.set_target_hwnd(None)
+            if self._last_sticky_hwnd is not None:
+                self.sound_player.play_unlock()
+                self._last_sticky_hwnd = None
+        # source == "session": no border, no sound; tray label refresh
+        # follows in Task 16.
+
+    def _on_target_invalid(self, reason: str) -> None:
+        """Locked target window has gone — notify and clear silently."""
+        if reason == "closed":
+            self._notify(
+                "TextWhisper",
+                "Paste target window is gone — press your lock-toggle "
+                "hotkey to re-lock. Transcription stays in your clipboard.",
+            )
+            self.paste_target.clear_sticky_silently()
 
     def _on_engine_error(self, message: str) -> None:
         self._notify("TextWhisper - Whisper error", message, error=True)

@@ -452,3 +452,35 @@ def test_type_text_with_dead_target_returns_zero(tmp_appdata, qapp):
         kb = KeyboardOutput(sm)
         sent = kb.type_text("hi", target_hwnd=42)
     assert sent == 0
+
+
+def test_paste_with_closed_target_invokes_invalid_callback(tmp_appdata, qapp):
+    from src import win32_window_utils as w
+
+    sm = SettingsManager()
+    sm.set("output_method", "paste")
+    sm.set("paste_settle_ms", 0)
+    invalid_calls: list[str] = []
+    with patch("src.keyboard_output.Controller") as ctrl_cls, \
+         patch.object(w, "is_window", return_value=False):
+        ctrl_cls.return_value = MagicMock()
+        kb = KeyboardOutput(sm, on_target_invalid=invalid_calls.append)
+        sent = kb.type_text("hi", target_hwnd=42)
+    assert sent == 0
+    assert invalid_calls == ["closed"]
+
+
+def test_type_with_closed_target_invokes_invalid_callback(tmp_appdata, qapp):
+    from src import win32_window_utils as w
+
+    sm = SettingsManager()
+    sm.set("output_method", "type")
+    sm.set("type_delay_ms", 0)
+    invalid_calls: list[str] = []
+    with patch("src.keyboard_output.Controller") as ctrl_cls, \
+         patch.object(w, "is_window", return_value=False):
+        ctrl_cls.return_value = MagicMock()
+        kb = KeyboardOutput(sm, on_target_invalid=invalid_calls.append)
+        sent = kb.type_text("hi", target_hwnd=42)
+    assert sent == 0
+    assert invalid_calls == ["closed"]

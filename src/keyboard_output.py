@@ -67,10 +67,15 @@ def _wait_for_user_modifier_release(timeout_ms: int, poll_ms: int = 10) -> bool:
 
 
 class KeyboardOutput:
-    def __init__(self, settings) -> None:
+    def __init__(self, settings, on_target_invalid=None) -> None:
         self.settings = settings
         self._kb = Controller()
         self._lock = threading.Lock()
+        # Optional callback invoked with a reason string when a target_hwnd
+        # paste/type fails because the target is closed (or PID-drifted).
+        # The app uses this to surface a tray notification and clear the
+        # sticky lock without coupling KeyboardOutput to Qt signals.
+        self._on_target_invalid = on_target_invalid
 
     # ------------------------------------------------------------------
     # Public typing entry point
@@ -104,6 +109,8 @@ class KeyboardOutput:
         if target_hwnd is not None:
             if not w.is_window(target_hwnd):
                 log.warning("Type target hwnd=%s is closed; skipping.", target_hwnd)
+                if self._on_target_invalid:
+                    self._on_target_invalid("closed")
                 return 0
             prev_fg = w.get_foreground_window() or None
             if w.is_iconic(target_hwnd):
@@ -188,6 +195,8 @@ class KeyboardOutput:
         if target_hwnd is not None:
             if not w.is_window(target_hwnd):
                 log.warning("Paste target hwnd=%s is closed; skipping.", target_hwnd)
+                if self._on_target_invalid:
+                    self._on_target_invalid("closed")
                 return 0
             prev_fg = w.get_foreground_window() or None
             if w.is_iconic(target_hwnd):
