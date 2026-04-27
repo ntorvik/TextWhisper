@@ -177,7 +177,7 @@ def play_lock(self) -> None: ...
 def play_unlock(self) -> None: ...
 ```
 
-Both gated by new setting `play_lock_sounds` (default True). Tone files stored in the existing `assets/sounds/` directory: `lock.wav` (ascending two-note chirp, ~150 ms) and `unlock.wav` (descending two-note chirp, ~150 ms). Reuses the existing playback path (no new audio backend).
+Both gated by new setting `play_lock_sounds` (default True). Tones are generated procedurally with numpy via the existing `_make_chime` helper (matches `play_ready`/`play_stop` pattern — no .wav assets). New constants: `LOCK_FREQS = (523.0, 698.0)` (C5→F5, ascending = "lock") and `UNLOCK_FREQS = (698.0, 523.0)` (F5→C5, descending = "unlock"). Reuses the existing playback path.
 
 ### 5.6 `app.py` wiring
 
