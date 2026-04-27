@@ -84,7 +84,7 @@ This spec defines a **paste target lock** feature: a way to bind dictated output
 **Files added:**
 - `src/paste_target.py` — `PasteTargetController(QObject)`. Pure state + decisions. No Qt UI imports beyond `QObject`/`pyqtSignal`. No `ctypes`.
 - `src/ui/window_border_overlay.py` — `WindowBorderOverlay(QWidget)`. Visual only.
-- `src/win32_window_utils.py` — function-only Win32 wrapper. The **only** module that imports `ctypes.windll.user32` for window inspection/control.
+- `src/win32_window_utils.py` — function-only Win32 wrapper. The **only** module that imports `ctypes.windll.user32` for **inspecting or controlling other applications' windows**. Pre-existing in-process `ctypes.windll` usages (e.g. `keyboard_output.py` calls `GetAsyncKeyState` for keyboard-state polling; `ui/oscilloscope.py` calls DWM / `SetWindowPos` to style our own widget) are different concerns and intentionally not consolidated here.
 
 **Files modified (small surface):**
 - `src/keyboard_output.py` — `_paste_text` gains optional `target_hwnd` parameter
