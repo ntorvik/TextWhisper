@@ -16,6 +16,7 @@ import sys
 log = logging.getLogger(__name__)
 
 _IS_WIN = sys.platform == "win32"
+_SW_RESTORE = 9  # ShowWindow command — see Win32 docs for SW_RESTORE
 
 
 if _IS_WIN:
@@ -51,10 +52,7 @@ if _IS_WIN:
         wintypes.BOOL,
     ]
     _user32.AttachThreadInput.restype = wintypes.BOOL
-    _user32.GetCurrentThreadId = _kernel32.GetCurrentThreadId
     _kernel32.GetCurrentThreadId.restype = wintypes.DWORD
-
-    _SW_RESTORE = 9
 
 
 def get_foreground_window() -> int:
@@ -111,8 +109,17 @@ def get_window_process_name(hwnd: int) -> str:
         return ""
     try:
         import psutil
+    except ImportError:
+        log.warning("psutil not installed; get_window_process_name returning empty.")
+        return ""
+    try:
         return psutil.Process(pid).name()
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        # Process exited between the pid lookup and Process(...).name(),
+        # or we don't have permission. Both are normal — empty string is fine.
+        return ""
     except Exception:
+        log.debug("get_window_process_name failed for pid=%s", pid, exc_info=True)
         return ""
 
 
@@ -134,7 +141,7 @@ def set_foreground_with_attach(hwnd: int) -> bool:
     if not _IS_WIN or not hwnd:
         return False
     target_tid = _user32.GetWindowThreadProcessId(hwnd, None)
-    our_tid = _user32.GetCurrentThreadId()
+    our_tid = _kernel32.GetCurrentThreadId()
     if target_tid == 0:
         return False
     attached = False
