@@ -76,22 +76,43 @@ class KeyboardOutput:
     # Public typing entry point
     # ------------------------------------------------------------------
 
-    def type_text(self, text: str) -> int:
-        """Emit ``text`` into the focused window. Returns chars actually emitted."""
+    def type_text(self, text: str, target_hwnd: int | None = None) -> int:
+        """Emit ``text`` into the focused window. Returns chars actually emitted.
+
+        ``target_hwnd``: when supplied, the text is routed to that specific
+        window via the focus-shift path (see _paste_text / _type_text).
+        ``None`` preserves the original "type into whoever has focus" behavior.
+        """
         if not text:
             return 0
         method = str(self.settings.get("output_method", "type")).lower()
         if method == "paste":
-            return self._paste_text(text)
-        return self._type_text(text)
+            return self._paste_text(text, target_hwnd=target_hwnd)
+        return self._type_text(text, target_hwnd=target_hwnd)
 
     # ------------------------------------------------------------------
     # Mode 1: char-by-char typing
     # ------------------------------------------------------------------
 
-    def _type_text(self, text: str) -> int:
+    def _type_text(self, text: str, target_hwnd: int | None = None) -> int:
+        from . import win32_window_utils as w
+
         delay = max(0, int(self.settings.get("type_delay_ms", 4))) / 1000.0
         trailing_space = bool(self.settings.get("trailing_space", True))
+
+        prev_fg: int | None = None
+        if target_hwnd is not None:
+            if not w.is_window(target_hwnd):
+                log.warning("Type target hwnd=%s is closed; skipping.", target_hwnd)
+                return 0
+            prev_fg = w.get_foreground_window() or None
+            if w.is_iconic(target_hwnd):
+                w.restore_window(target_hwnd)
+            w.set_foreground_with_attach(target_hwnd)
+            focus_settle = max(0, int(self.settings.get("paste_lock_focus_settle_ms", 50))) / 1000.0
+            if focus_settle > 0:
+                time.sleep(focus_settle)
+
         typed = 0
         with self._lock:
             try:
@@ -103,9 +124,12 @@ class KeyboardOutput:
                 if trailing_space and not text.endswith((" ", "\n", "\t")):
                     self._tap_char(" ")
                     typed += 1
-                log.info("Typed %d chars: %r", typed, text)
+                log.info("Typed %d chars: %r (target=%s)", typed, text, target_hwnd)
             except Exception:
                 log.exception("Keyboard injection failed (focused window may be elevated)")
+
+        if target_hwnd is not None and prev_fg:
+            w.set_foreground_with_attach(prev_fg)
         return typed
 
     def _tap_char(self, ch: str) -> None:
@@ -121,34 +145,58 @@ class KeyboardOutput:
     # Mode 2: clipboard paste
     # ------------------------------------------------------------------
 
-    def _paste_text(self, text: str) -> int:
+    def _paste_text(self, text: str, target_hwnd: int | None = None) -> int:
         """Set clipboard to ``text``, send Ctrl+V, then a real space keystroke.
 
-        Many terminal apps (Windows Terminal, Claude Code, IDE consoles) strip
-        trailing whitespace from clipboard pastes. To guarantee a separator
-        between consecutive transcriptions we deliberately leave the trailing
-        space out of the clipboard payload and instead inject a real
-        ``Key.space`` keystroke immediately after the paste. Real keypresses
-        are not subject to the same stripping.
+        When ``target_hwnd`` is supplied, briefly shifts foreground focus to
+        that window for the paste then restores the user's previous focus.
+        Auto-restores the target if minimized; returns 0 (no keystrokes sent)
+        if the target is closed or its PID has drifted (HWND reuse).
 
-        Modifier-residue guard: if the user is still physically holding the
-        Alt key from a recent toggle-hotkey press (e.g. they hit Alt+Z to stop
-        dictation and walked attention away before lifting Alt), our Ctrl+V
-        becomes Ctrl+Alt+V — which most apps treat as a different shortcut or
-        no-op. We briefly wait for them to release before pressing Ctrl.
+        Many terminal apps (Windows Terminal, Claude Code, IDE consoles)
+        strip trailing whitespace from clipboard pastes. To guarantee a
+        separator between consecutive transcriptions we leave the trailing
+        space out of the clipboard payload and inject a real ``Key.space``
+        keystroke immediately after the paste.
+
+        Modifier-residue guard: see the existing block; runs in both target
+        modes.
         """
         from PyQt6.QtWidgets import QApplication
+
+        from . import win32_window_utils as w
 
         trailing_space = bool(self.settings.get("trailing_space", True))
         try:
             QApplication.clipboard().setText(text)
         except Exception:
             log.exception("Clipboard write failed; falling back to typing.")
-            return self._type_text(text)
+            return self._type_text(text, target_hwnd=target_hwnd)
 
         settle = max(0, int(self.settings.get("paste_settle_ms", 30))) / 1000.0
         if settle > 0:
             time.sleep(settle)
+
+        # Target-aware path: validate, shift focus, do paste, restore.
+        prev_fg: int | None = None
+        if target_hwnd is not None:
+            if not w.is_window(target_hwnd):
+                log.warning("Paste target hwnd=%s is closed; skipping.", target_hwnd)
+                return 0
+            prev_fg = w.get_foreground_window() or None
+            if w.is_iconic(target_hwnd):
+                log.info("Paste target hwnd=%s is minimized; restoring.", target_hwnd)
+                w.restore_window(target_hwnd)
+            ok = w.set_foreground_with_attach(target_hwnd)
+            if not ok:
+                log.warning(
+                    "set_foreground_with_attach refused for hwnd=%s "
+                    "(focus-stealing protection or UIPI block); pasting anyway.",
+                    target_hwnd,
+                )
+            focus_settle = max(0, int(self.settings.get("paste_lock_focus_settle_ms", 50))) / 1000.0
+            if focus_settle > 0:
+                time.sleep(focus_settle)
 
         mod_clear_ms = max(0, int(self.settings.get("paste_modifier_clear_ms", 250)))
         if not _wait_for_user_modifier_release(mod_clear_ms):
@@ -166,19 +214,22 @@ class KeyboardOutput:
                 self._kb.release("v")
                 self._kb.release(Key.ctrl)
                 sent = len(text)
-                # Inject a real space keystroke as the segment separator.
                 if trailing_space and not text.endswith((" ", "\n", "\t")):
-                    # Tiny pause so the paste lands first.
                     if settle > 0:
                         time.sleep(settle)
                     self._kb.press(Key.space)
                     self._kb.release(Key.space)
                     sent += 1
-                log.info("Pasted %d chars via Ctrl+V (clipboard=%r, +space=%s)",
-                         sent, text, trailing_space)
+                log.info("Pasted %d chars via Ctrl+V (clipboard=%r, +space=%s, target=%s)",
+                         sent, text, trailing_space, target_hwnd)
             except Exception:
                 log.exception("Ctrl+V injection failed")
                 return 0
+
+        # Restore the user's previous foreground after the paste lands.
+        if target_hwnd is not None and prev_fg:
+            w.set_foreground_with_attach(prev_fg)
+
         return sent
 
     # ------------------------------------------------------------------

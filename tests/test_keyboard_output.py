@@ -324,3 +324,131 @@ def test_replace_last_period_with_comma_without_trailing_space(tmp_appdata):
     assert "".join(typed_chars) == ","
     space_presses = [c.args[0] for c in mock.press.call_args_list if c.args[0] == Key.space]
     assert space_presses == []
+
+
+def test_type_text_accepts_target_hwnd_kwarg(tmp_appdata):
+    """target_hwnd defaults to None and existing behavior is preserved."""
+    kb, mock = _kb(tmp_appdata, type_delay_ms=0, trailing_space=False)
+    typed = kb.type_text("hello", target_hwnd=None)
+    typed_chars = [c.args[0] for c in mock.type.call_args_list]
+    assert "".join(typed_chars) == "hello"
+    assert typed == 5
+
+
+def test_paste_with_target_hwnd_does_focus_shift(tmp_appdata, qapp):
+    """target_hwnd → capture prev fg → set_foreground(target) → Ctrl+V →
+    set_foreground(prev fg) to restore."""
+    from src import win32_window_utils as w
+    from pynput.keyboard import Key
+
+    sm = SettingsManager()
+    sm.set("output_method", "paste")
+    sm.set("paste_settle_ms", 0)
+    sm.set("paste_modifier_clear_ms", 0)
+    sm.set("paste_lock_focus_settle_ms", 0)
+    with patch("src.keyboard_output.Controller") as ctrl_cls, \
+         patch.object(w, "is_window", return_value=True), \
+         patch.object(w, "get_window_pid", return_value=999), \
+         patch.object(w, "is_iconic", return_value=False), \
+         patch.object(w, "get_foreground_window", return_value=11111), \
+         patch.object(w, "set_foreground_with_attach", return_value=True) as fg:
+        ctrl_cls.return_value = MagicMock()
+        kb = KeyboardOutput(sm)
+        mock = kb._kb
+        kb.type_text("hello", target_hwnd=42)
+    # Two foreground calls: target first, prev fg second.
+    assert [c.args[0] for c in fg.call_args_list] == [42, 11111]
+    presses = [c.args[0] for c in mock.press.call_args_list]
+    assert Key.ctrl in presses and "v" in presses
+
+
+def test_paste_with_dead_target_returns_zero_and_skips_keystrokes(tmp_appdata, qapp):
+    from src import win32_window_utils as w
+    from pynput.keyboard import Key
+
+    sm = SettingsManager()
+    sm.set("output_method", "paste")
+    sm.set("paste_settle_ms", 0)
+    with patch("src.keyboard_output.Controller") as ctrl_cls, \
+         patch.object(w, "is_window", return_value=False), \
+         patch.object(w, "set_foreground_with_attach") as fg:
+        ctrl_cls.return_value = MagicMock()
+        kb = KeyboardOutput(sm)
+        mock = kb._kb
+        sent = kb.type_text("hello", target_hwnd=42)
+    assert sent == 0
+    fg.assert_not_called()
+    presses = [c.args[0] for c in mock.press.call_args_list]
+    assert Key.ctrl not in presses
+
+
+def test_paste_with_minimized_target_calls_restore(tmp_appdata, qapp):
+    from src import win32_window_utils as w
+
+    sm = SettingsManager()
+    sm.set("output_method", "paste")
+    sm.set("paste_settle_ms", 0)
+    sm.set("paste_modifier_clear_ms", 0)
+    sm.set("paste_lock_focus_settle_ms", 0)
+    with patch("src.keyboard_output.Controller") as ctrl_cls, \
+         patch.object(w, "is_window", return_value=True), \
+         patch.object(w, "get_window_pid", return_value=999), \
+         patch.object(w, "is_iconic", return_value=True), \
+         patch.object(w, "get_foreground_window", return_value=11111), \
+         patch.object(w, "set_foreground_with_attach", return_value=True), \
+         patch.object(w, "restore_window") as rw:
+        ctrl_cls.return_value = MagicMock()
+        kb = KeyboardOutput(sm)
+        kb.type_text("hello", target_hwnd=42)
+    rw.assert_called_once_with(42)
+
+
+def test_paste_no_target_unchanged(tmp_appdata, qapp):
+    """target_hwnd=None must take the original path (no Win32 calls)."""
+    from src import win32_window_utils as w
+
+    sm = SettingsManager()
+    sm.set("output_method", "paste")
+    sm.set("paste_settle_ms", 0)
+    sm.set("paste_modifier_clear_ms", 0)
+    with patch("src.keyboard_output.Controller") as ctrl_cls, \
+         patch.object(w, "set_foreground_with_attach") as fg, \
+         patch.object(w, "is_window") as iw:
+        ctrl_cls.return_value = MagicMock()
+        kb = KeyboardOutput(sm)
+        kb.type_text("hello")  # no target_hwnd
+    fg.assert_not_called()
+    iw.assert_not_called()
+
+
+def test_type_text_with_target_hwnd_does_focus_shift(tmp_appdata, qapp):
+    from src import win32_window_utils as w
+
+    sm = SettingsManager()
+    sm.set("output_method", "type")
+    sm.set("type_delay_ms", 0)
+    sm.set("paste_lock_focus_settle_ms", 0)
+    sm.set("trailing_space", False)
+    with patch("src.keyboard_output.Controller") as ctrl_cls, \
+         patch.object(w, "is_window", return_value=True), \
+         patch.object(w, "is_iconic", return_value=False), \
+         patch.object(w, "get_foreground_window", return_value=11111), \
+         patch.object(w, "set_foreground_with_attach", return_value=True) as fg:
+        ctrl_cls.return_value = MagicMock()
+        kb = KeyboardOutput(sm)
+        kb.type_text("hi", target_hwnd=42)
+    assert [c.args[0] for c in fg.call_args_list] == [42, 11111]
+
+
+def test_type_text_with_dead_target_returns_zero(tmp_appdata, qapp):
+    from src import win32_window_utils as w
+
+    sm = SettingsManager()
+    sm.set("output_method", "type")
+    sm.set("type_delay_ms", 0)
+    with patch("src.keyboard_output.Controller") as ctrl_cls, \
+         patch.object(w, "is_window", return_value=False):
+        ctrl_cls.return_value = MagicMock()
+        kb = KeyboardOutput(sm)
+        sent = kb.type_text("hi", target_hwnd=42)
+    assert sent == 0
