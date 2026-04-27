@@ -81,6 +81,40 @@ def test_unknown_hotkey_is_logged(app, caplog):
     assert any("frobnicate" in r.message for r in caplog.records)
 
 
+def test_delete_hotkey_ignored_when_not_capturing(app):
+    """When dictation is off, the delete hotkey must NOT trigger our handler.
+
+    pynput is a passive listener so the OS still receives the Delete keystroke
+    and acts on it normally. We just don't pile our Ctrl+Backspace on top.
+    """
+    app._is_capturing = False
+    with patch.object(app, "_on_delete_pressed") as h:
+        app._on_hotkey_triggered("delete")
+    h.assert_not_called()
+
+
+def test_delete_hotkey_active_when_capturing(app):
+    app._is_capturing = True
+    with patch.object(app, "_on_delete_pressed") as h:
+        app._on_hotkey_triggered("delete")
+    h.assert_called_once()
+
+
+def test_stop_capture_clears_pending_delete_state(app):
+    """A half-open double-tap window must not survive into not-capturing
+    state — once the gate kicks in, a stale single-tap timer would fire into
+    a context where the user has stopped dictating."""
+    app._is_capturing = True
+    app._delete_pending = True
+    app._extra_chars_typed_by_hotkey = 3
+    app._delete_timer.start(5000)
+    with patch.object(app.audio, "stop"), patch.object(app.sound_player, "play_stop"):
+        app._stop_capture()
+    assert app._delete_pending is False
+    assert app._extra_chars_typed_by_hotkey == 0
+    assert not app._delete_timer.isActive()
+
+
 def test_single_tap_delete_calls_delete_word(app, qapp):
     app.settings.set("delete_double_tap_ms", 100)
     with patch.object(app.keyboard_out, "delete_word") as dw, patch.object(

@@ -282,6 +282,14 @@ class TextWhisperApp(QObject):
         # Continuation context dies with the capture session.
         self._last_segment_ended_with_period = False
         self._continuation_pending = False
+        # Tear down any half-open delete double-tap window: with the gate in
+        # _on_hotkey_triggered, future delete presses won't reach the state
+        # machine while dictation is off, so a pending single-tap timer would
+        # fire into a stale state and erase a word out of context.
+        if self._delete_timer.isActive():
+            self._delete_timer.stop()
+        self._delete_pending = False
+        self._extra_chars_typed_by_hotkey = 0
         self.tray.set_active(False)
         self.oscilloscope.set_active(False)
         self.oscilloscope.clear()
@@ -413,6 +421,14 @@ class TextWhisperApp(QObject):
         if name == "toggle":
             self._toggle_capture()
         elif name == "delete":
+            # Delete-word is a dictation-time tool. When the app is loaded but
+            # dictation is OFF, this hotkey must pass through to the OS default
+            # (e.g. Delete deletes the next char in the focused window) without
+            # also firing our Ctrl+Backspace. pynput is a passive listener, so
+            # the OS keystroke fires either way — we just suppress our handler.
+            if not self._is_capturing:
+                log.info("Delete hotkey ignored — dictation is not active.")
+                return
             self._on_delete_pressed()
         elif name == "voice_interrupt":
             self.tts.interrupt()
