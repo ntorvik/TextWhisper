@@ -370,6 +370,8 @@ class TextWhisperApp(QObject):
         prev_delete_hotkey = self.settings.get("delete_hotkey")
         prev_voice_hotkey = self.settings.get("voice_interrupt_hotkey")
         prev_voice_enabled = bool(self.settings.get("voice_enabled", False))
+        prev_lock_hotkey = self.settings.get("paste_lock_hotkey")
+        prev_lock_enabled = bool(self.settings.get("paste_lock_enabled", False))
         prev_model = self.settings.get("model_size")
         prev_device = self.settings.get("device")
         prev_compute = self.settings.get("compute_type")
@@ -384,8 +386,23 @@ class TextWhisperApp(QObject):
             or self.settings.get("delete_hotkey") != prev_delete_hotkey
             or self.settings.get("voice_interrupt_hotkey") != prev_voice_hotkey
             or bool(self.settings.get("voice_enabled", False)) != prev_voice_enabled
+            or self.settings.get("paste_lock_hotkey") != prev_lock_hotkey
+            or bool(self.settings.get("paste_lock_enabled", False)) != prev_lock_enabled
         ):
             self.hotkey.update_mapping(self._build_hotkey_mapping())
+
+        # If the master lock flag was toggled, the tray section visibility
+        # must update without waiting for the next lock_changed signal.
+        if (
+            bool(self.settings.get("paste_lock_enabled", False))
+            != prev_lock_enabled
+        ):
+            self.tray.set_lock_state(
+                self.paste_target.current_target(),
+                "sticky" if self.paste_target._sticky_hwnd is not None
+                else ("session" if self.paste_target._per_session_hwnd is not None
+                      else "none"),
+            )
 
         engine_dirty = (
             self.settings.get("model_size") != prev_model

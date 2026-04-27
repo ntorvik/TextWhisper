@@ -150,6 +150,7 @@ class SettingsDialog(QDialog):
 
         self.tabs = QTabWidget(self)
         self.tabs.addTab(self._build_hotkeys_tab(), "Hotkeys")
+        self.tabs.addTab(self._build_paste_lock_tab(), "Paste Lock")
         self.tabs.addTab(self._build_speech_tab(), "Speech")
         self.tabs.addTab(self._build_output_tab(), "Output")
         self.tabs.addTab(self._build_feedback_tab(), "Feedback")
@@ -184,6 +185,8 @@ class SettingsDialog(QDialog):
         # Hotkey live-validation must run after both line edits exist.
         self.hotkey_edit.textChanged.connect(self._refresh_hotkey_warning)
         self.delete_hotkey_edit.textChanged.connect(self._refresh_hotkey_warning)
+        self.paste_lock_hotkey_edit.textChanged.connect(self._refresh_hotkey_warning)
+        self.paste_lock_enabled_check.toggled.connect(self._refresh_hotkey_warning)
         self._refresh_hotkey_warning()
 
     # -------------------------------------------------------------------
@@ -230,6 +233,91 @@ class SettingsDialog(QDialog):
         self.hotkey_warning.setVisible(False)
         form.addRow("", self.hotkey_warning)
         return page
+
+    def _build_paste_lock_tab(self) -> QWidget:
+        page = QWidget()
+        form = QFormLayout(page)
+
+        self.paste_lock_enabled_check = QCheckBox("Enable paste-target lock")
+        self.paste_lock_enabled_check.setObjectName("paste_lock_enabled_check")
+        self.paste_lock_enabled_check.setChecked(
+            bool(self.settings.get("paste_lock_enabled", False))
+        )
+        self.paste_lock_enabled_check.toggled.connect(self._refresh_paste_lock_enable)
+        form.addRow(self.paste_lock_enabled_check)
+
+        self.paste_lock_hotkey_edit = QLineEdit(
+            str(self.settings.get("paste_lock_hotkey", "<alt>+l"))
+        )
+        self.paste_lock_hotkey_edit.setObjectName("paste_lock_hotkey_edit")
+        self.paste_lock_hotkey_edit.setPlaceholderText("<alt>+l")
+        self.paste_lock_hotkey_edit.setToolTip(
+            "Hotkey to lock the paste target (smart toggle: lock current "
+            "window / re-lock to current / unlock if already locked here)."
+        )
+        record_lock_btn = QPushButton("Record...")
+        record_lock_btn.clicked.connect(
+            lambda: self._record_into(self.paste_lock_hotkey_edit)
+        )
+        form.addRow(
+            "Lock toggle hotkey:",
+            self._row(self.paste_lock_hotkey_edit, record_lock_btn),
+        )
+
+        self.paste_lock_border_enabled_check = QCheckBox(
+            "Show colored border around locked window"
+        )
+        self.paste_lock_border_enabled_check.setObjectName(
+            "paste_lock_border_enabled_check"
+        )
+        self.paste_lock_border_enabled_check.setChecked(
+            bool(self.settings.get("paste_lock_border_enabled", True))
+        )
+        form.addRow(self.paste_lock_border_enabled_check)
+
+        self.paste_lock_border_color_button = ColorButton(
+            str(self.settings.get("paste_lock_border_color", "#ff9900"))
+        )
+        self.paste_lock_border_color_button.setObjectName(
+            "paste_lock_border_color_button"
+        )
+        form.addRow("Border color:", self.paste_lock_border_color_button)
+
+        self.paste_lock_border_thickness_spin = QSpinBox()
+        self.paste_lock_border_thickness_spin.setObjectName(
+            "paste_lock_border_thickness_spin"
+        )
+        self.paste_lock_border_thickness_spin.setRange(1, 10)
+        self.paste_lock_border_thickness_spin.setSuffix(" px")
+        self.paste_lock_border_thickness_spin.setValue(
+            int(self.settings.get("paste_lock_border_thickness", 3))
+        )
+        form.addRow("Border thickness:", self.paste_lock_border_thickness_spin)
+
+        self.paste_lock_play_sounds_check = QCheckBox(
+            "Play tone on lock/unlock"
+        )
+        self.paste_lock_play_sounds_check.setObjectName(
+            "paste_lock_play_sounds_check"
+        )
+        self.paste_lock_play_sounds_check.setChecked(
+            bool(self.settings.get("paste_lock_play_sounds", True))
+        )
+        form.addRow(self.paste_lock_play_sounds_check)
+
+        self._refresh_paste_lock_enable()
+        return page
+
+    def _refresh_paste_lock_enable(self) -> None:
+        enabled = self.paste_lock_enabled_check.isChecked()
+        for w in (
+            self.paste_lock_hotkey_edit,
+            self.paste_lock_border_enabled_check,
+            self.paste_lock_border_color_button,
+            self.paste_lock_border_thickness_spin,
+            self.paste_lock_play_sounds_check,
+        ):
+            w.setEnabled(enabled)
 
     def _build_speech_tab(self) -> QWidget:
         page = QWidget()
@@ -826,6 +914,12 @@ class SettingsDialog(QDialog):
         issues = validate_hotkeys(
             self.hotkey_edit.text().strip(),
             self.delete_hotkey_edit.text().strip(),
+            lock_toggle=(
+                self.paste_lock_hotkey_edit.text().strip()
+                if (hasattr(self, "paste_lock_hotkey_edit")
+                    and self.paste_lock_enabled_check.isChecked())
+                else None
+            ),
         )
         if not issues:
             self.hotkey_warning.setVisible(False)
@@ -848,7 +942,10 @@ class SettingsDialog(QDialog):
     def _save(self) -> None:
         hotkey = self.hotkey_edit.text().strip() or "<alt>+z"
         delete_hk = self.delete_hotkey_edit.text().strip() or "<delete>"
-        issues = validate_hotkeys(hotkey, delete_hk)
+        lock_hk = (
+            self.paste_lock_hotkey_edit.text().strip() or "<alt>+l"
+        ) if self.paste_lock_enabled_check.isChecked() else None
+        issues = validate_hotkeys(hotkey, delete_hk, lock_toggle=lock_hk)
         if any(level == "error" for level, _ in issues):
             QMessageBox.warning(
                 self,
@@ -926,4 +1023,29 @@ class SettingsDialog(QDialog):
             self.voice_interrupt_edit.text().strip(),
         )
         self.settings.set("voice_ipc_port", int(self.voice_port_spin.value()))
+        # Paste target lock
+        self.settings.set(
+            "paste_lock_enabled",
+            bool(self.paste_lock_enabled_check.isChecked()),
+        )
+        self.settings.set(
+            "paste_lock_hotkey",
+            self.paste_lock_hotkey_edit.text().strip() or "<alt>+l",
+        )
+        self.settings.set(
+            "paste_lock_border_enabled",
+            bool(self.paste_lock_border_enabled_check.isChecked()),
+        )
+        self.settings.set(
+            "paste_lock_border_color",
+            self.paste_lock_border_color_button.hex_value(),
+        )
+        self.settings.set(
+            "paste_lock_border_thickness",
+            int(self.paste_lock_border_thickness_spin.value()),
+        )
+        self.settings.set(
+            "paste_lock_play_sounds",
+            bool(self.paste_lock_play_sounds_check.isChecked()),
+        )
         self.accept()
