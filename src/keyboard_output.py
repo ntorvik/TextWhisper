@@ -108,7 +108,13 @@ class KeyboardOutput:
             prev_fg = w.get_foreground_window() or None
             if w.is_iconic(target_hwnd):
                 w.restore_window(target_hwnd)
-            w.set_foreground_with_attach(target_hwnd)
+            ok = w.set_foreground_with_attach(target_hwnd)
+            if not ok:
+                log.warning(
+                    "set_foreground_with_attach refused for hwnd=%s "
+                    "(focus-stealing protection or UIPI block); typing anyway.",
+                    target_hwnd,
+                )
             focus_settle = max(0, int(self.settings.get("paste_lock_focus_settle_ms", 50))) / 1000.0
             if focus_settle > 0:
                 time.sleep(focus_settle)
