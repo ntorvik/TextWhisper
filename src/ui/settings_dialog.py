@@ -319,6 +319,35 @@ class SettingsDialog(QDialog):
         ):
             w.setEnabled(enabled)
 
+    @staticmethod
+    def _dedupe_audio_devices(channel_key: str) -> list[tuple[str, int]]:
+        """Return deduplicated (name, index) pairs, preferring WASAPI for lowest latency."""
+        try:
+            hostapis = sd.query_hostapis()
+        except Exception:
+            hostapis = []
+        api_names = {i: info.get("name", "") for i, info in enumerate(hostapis)}
+
+        def api_priority(api_idx: int) -> int:
+            name = api_names.get(api_idx, "").lower()
+            if "wasapi" in name:
+                return 0
+            if "directsound" in name or "ds" in name:
+                return 1
+            return 2
+
+        by_name: dict[str, tuple[int, int]] = {}
+        try:
+            for idx, dev in enumerate(sd.query_devices()):
+                if int(dev.get(channel_key, 0)) > 0:
+                    name = dev["name"]
+                    prio = api_priority(dev.get("hostapi", 99))
+                    if name not in by_name or prio < by_name[name][1]:
+                        by_name[name] = (idx, prio)
+        except Exception:
+            pass
+        return [(name, idx) for name, (idx, _) in by_name.items()]
+
     def _build_devices_tab(self) -> QWidget:
         """Audio I/O hardware: microphone input and speaker output."""
         page = QWidget()
@@ -327,12 +356,8 @@ class SettingsDialog(QDialog):
         self.mic_combo = QComboBox()
         self.mic_combo.setObjectName("mic_combo")
         self.mic_combo.addItem("System default", None)
-        try:
-            for idx, dev in enumerate(sd.query_devices()):
-                if int(dev.get("max_input_channels", 0)) > 0:
-                    self.mic_combo.addItem(f"{idx}: {dev['name']}", idx)
-        except Exception as e:
-            self.mic_combo.addItem(f"(error listing devices: {e})", None)
+        for name, idx in self._dedupe_audio_devices("max_input_channels"):
+            self.mic_combo.addItem(name, idx)
         current_mic = self.settings.get("microphone_device")
         for i in range(self.mic_combo.count()):
             if self.mic_combo.itemData(i) == current_mic:
@@ -343,12 +368,8 @@ class SettingsDialog(QDialog):
         self.audio_output_combo = QComboBox()
         self.audio_output_combo.setObjectName("audio_output_combo")
         self.audio_output_combo.addItem("System default", None)
-        try:
-            for idx, dev in enumerate(sd.query_devices()):
-                if int(dev.get("max_output_channels", 0)) > 0:
-                    self.audio_output_combo.addItem(f"{idx}: {dev['name']}", idx)
-        except Exception as e:
-            self.audio_output_combo.addItem(f"(error listing devices: {e})", None)
+        for name, idx in self._dedupe_audio_devices("max_output_channels"):
+            self.audio_output_combo.addItem(name, idx)
         current_out = self.settings.get("audio_output_device")
         for i in range(self.audio_output_combo.count()):
             if self.audio_output_combo.itemData(i) == current_out:
