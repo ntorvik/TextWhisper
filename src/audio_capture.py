@@ -52,6 +52,10 @@ class AudioCapture(QObject):
         preroll_ms = int(self.settings.get("vad_preroll_ms", 200))
         preroll_blocks = max(1, preroll_ms // 30)
         self._preroll: collections.deque[np.ndarray] = collections.deque(maxlen=preroll_blocks)
+        # Set by flush() to drop the next finished segment. Used by the
+        # voice_interrupt path so a sliver of TTS audio that leaked into
+        # the mic before auto-mute kicked in cannot become a paste.
+        self._discard_next_segment: bool = False
 
     @property
     def is_running(self) -> bool:
@@ -91,6 +95,20 @@ class AudioCapture(QObject):
             self._buffered_samples = 0
             self._has_speech = False
             self._silence_blocks = 0
+
+    def flush(self) -> None:
+        """Clear any partially-captured audio + arm one-shot suppression of
+        the next emitted segment.
+
+        Called by the voice_interrupt path. Safe to call when no segment is
+        in flight (the buffer is already empty; the flag still arms, which
+        is harmless because the next emit is whatever fires next)."""
+        with self._lock:
+            self._buffer.clear()
+            self._buffered_samples = 0
+            self._has_speech = False
+            self._silence_blocks = 0
+            self._discard_next_segment = True
 
     def _callback(self, indata, frames, time_info, status) -> None:  # portaudio thread
         if status:
@@ -154,6 +172,15 @@ class AudioCapture(QObject):
             return
         audio = np.concatenate(self._buffer)
         self._reset_segment()
+        if self._discard_next_segment:
+            self._discard_next_segment = False
+            log.info(
+                "Dropped post-flush segment: %.2fs (%d samples) — "
+                "voice_interrupt suppression",
+                len(audio) / self.SAMPLE_RATE,
+                len(audio),
+            )
+            return
         if len(audio) >= min_samples:
             log.info(
                 "Segment ready: %.2fs (%d samples, peak=%.3f)",
