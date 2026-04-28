@@ -45,6 +45,21 @@ def server(tmp_appdata):
     srv.stop()
 
 
+def _wait_until(predicate, timeout: float = 1.0, interval: float = 0.005) -> bool:
+    """Poll ``predicate`` until it returns truthy or ``timeout`` elapses.
+
+    Used to bridge the now-async /speak handler — the HTTP reply returns
+    immediately and summarise + tts.speak run on a worker thread, so tests
+    have to wait briefly before asserting the mocks were called.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return bool(predicate())
+
+
 def _post(port: int, path: str, payload: dict | None) -> tuple[int, dict]:
     body = json.dumps(payload or {}).encode("utf-8")
     req = urllib.request.Request(
@@ -87,6 +102,7 @@ def test_speak_summarises_then_calls_tts(server):
     srv, tts, summ = server
     code, body = _post(srv.port, "/speak", {"text": "Long technical response."})
     assert code == 202
+    assert _wait_until(lambda: tts.speak.called)
     summ.summarize.assert_called_once_with("Long technical response.")
     tts.speak.assert_called_once_with("summary(Long technical response.)")
     assert body["ok"] is True
@@ -98,6 +114,7 @@ def test_speak_skips_summary_when_flag_false(server):
         srv.port, "/speak", {"text": "Verbatim text.", "summarize": False}
     )
     assert code == 202
+    assert _wait_until(lambda: tts.speak.called)
     summ.summarize.assert_not_called()
     tts.speak.assert_called_once_with("Verbatim text.")
 
@@ -123,7 +140,24 @@ def test_speak_falls_back_to_raw_on_summariser_failure(server):
     summ.summarize.side_effect = RuntimeError("no key")
     code, _ = _post(srv.port, "/speak", {"text": "Long response."})
     assert code == 202
+    assert _wait_until(lambda: tts.speak.called)
     tts.speak.assert_called_once_with("Long response.")
+
+
+def test_speak_returns_quickly_even_when_summariser_is_slow(server):
+    """Stop-hook script's urlopen timeout is 2s; /speak must reply faster
+    than that even if the underlying Anthropic call is slow.
+    """
+    srv, tts, summ = server
+    # Simulate a slow Haiku call.
+    summ.summarize.side_effect = lambda x: (time.sleep(3), f"summary({x})")[1]
+    started = time.monotonic()
+    code, _ = _post(srv.port, "/speak", {"text": "Long response."})
+    elapsed = time.monotonic() - started
+    assert code == 202
+    assert elapsed < 1.0, f"/speak took {elapsed:.2f}s — should be sub-second"
+    # Confirm the slow summarise did eventually complete on the worker thread.
+    assert _wait_until(lambda: tts.speak.called, timeout=5.0)
 
 
 def test_speak_400_on_malformed_json(server):

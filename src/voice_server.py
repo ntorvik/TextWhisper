@@ -36,6 +36,31 @@ log = logging.getLogger(__name__)
 _BIND_HOST = "127.0.0.1"  # NEVER 0.0.0.0 — local-only by design.
 
 
+def _process_speak_async(text, summarize, summarizer, tts):
+    """Slow path: summarise via Anthropic, then enqueue on the TTS pump.
+
+    Runs on a background thread so /speak's HTTP response isn't gated on
+    the Anthropic call. ``tts.speak`` is itself non-blocking (enqueues onto
+    the TTS worker thread), so this thread exits ~immediately after.
+    """
+    spoken = text
+    if summarize and summarizer is not None:
+        try:
+            spoken = summarizer.summarize(text)
+        except Exception as e:
+            # Don't block read-back on summarisation failure — fall back to
+            # the raw text so the user hears SOMETHING and can fix their
+            # key. Never log the key in the error.
+            log.warning(
+                "Summariser failed (%s); reading raw response.", type(e).__name__
+            )
+            spoken = text
+    if not spoken:
+        log.info("Speak skipped — empty summary after processing.")
+        return
+    tts.speak(spoken)
+
+
 class _Handler(BaseHTTPRequestHandler):
     """Per-request handler; service refs are injected via class attrs."""
 
@@ -92,23 +117,19 @@ class _Handler(BaseHTTPRequestHandler):
         summarize = bool(
             body.get("summarize", self.settings.get("voice_summarize", True))
         )
-        spoken = text
-        if summarize and self.summarizer is not None:
-            try:
-                spoken = self.summarizer.summarize(text)
-            except Exception as e:
-                # Don't block read-back on summarisation failure — fall
-                # back to the raw text so the user hears SOMETHING and
-                # can fix their key. Never log the key in the error.
-                log.warning(
-                    "Summariser failed (%s); reading raw response.", type(e).__name__
-                )
-                spoken = text
-        if not spoken:
-            self._respond_json(204, {"ok": True, "skipped": "empty_summary"})
-            return
-        self.tts.speak(spoken)
-        self._respond_json(202, {"ok": True, "spoken_chars": len(spoken)})
+        # Respond before doing the slow work. Anthropic Haiku takes ~3s for
+        # substantial inputs but the Stop-hook script's urlopen timeout is
+        # 2s — synchronous processing forces every long response to race
+        # the timeout and spam stop-hook.log with TimeoutError tracebacks
+        # even though the read-back ultimately plays. Hand summarise +
+        # speak off to a worker thread so the HTTP reply is sub-millisecond.
+        self._respond_json(202, {"ok": True, "accepted_chars": len(text)})
+        threading.Thread(
+            target=_process_speak_async,
+            args=(text, summarize, self.summarizer, self.tts),
+            name="VoiceIPC-speak",
+            daemon=True,
+        ).start()
 
     # ------------------------------------------------------------------
     # /interrupt
