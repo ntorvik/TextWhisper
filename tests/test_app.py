@@ -891,3 +891,15 @@ def test_app_wires_tts_signals_to_mic_muter(app):
     on_end.assert_called_once()
     # speak_finished should have armed the resume timer (proof the slot ran).
     assert app.mic_muter._resume_timer.isActive()
+
+
+def test_voice_interrupt_hotkey_flushes_audio(app):
+    """Pressing voice_interrupt cuts TTS AND flushes any in-flight audio
+    so a sliver of TTS that leaked into the mic before auto-mute kicked
+    in cannot become a paste."""
+    from unittest.mock import patch
+    with patch.object(app.tts, "interrupt") as ti, \
+         patch.object(app.audio, "flush") as af:
+        app._on_hotkey_triggered("voice_interrupt")
+    ti.assert_called_once()
+    af.assert_called_once()

@@ -481,6 +481,10 @@ class TextWhisperApp(QObject):
             self._on_delete_pressed()
         elif name == "voice_interrupt":
             self.tts.interrupt()
+            # Discard any partially-captured audio + suppress the next
+            # finished segment so a sliver of TTS that leaked into the
+            # mic before auto-mute kicked in cannot become a paste.
+            self.audio.flush()
         elif name == "lock_toggle":
             self.paste_target.toggle_sticky()
         else:
