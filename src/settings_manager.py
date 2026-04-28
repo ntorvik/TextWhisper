@@ -40,6 +40,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "voice_volume": 0.85, # 0.0 .. 1.0
     "voice_summarize": True,  # if False, read raw assistant text verbatim
     "voice_summarize_model": "claude-haiku-4-5",
+    # Follow-up invitation gate. The summariser appends a short, varied
+    # "want me to walk through it?" line ONLY when the raw response was
+    # substantial — otherwise it's grating to hear the offer every turn.
+    # Substantial = ANY of: char_count > min_chars, contains a fenced
+    # code block (when invite_on_code), or paragraph_count >= min_paragraphs.
+    # Tuning lives in config.json only; not exposed in the Settings UI.
+    "voice_followup_min_chars": 800,
+    "voice_followup_min_paragraphs": 3,
+    "voice_followup_invite_on_code": True,
     # API key lives ONLY in config.json (which is in %APPDATA%, never in
     # the repo) or in the ANTHROPIC_API_KEY env var. Never logged. Empty
     # string means "fall back to env".

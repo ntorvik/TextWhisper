@@ -11,7 +11,9 @@ from src.summarizer import (
     SUMMARY_SYSTEM_PROMPT,
     MissingAPIKeyError,
     Summarizer,
+    _classify_response,
     _redact,
+    _render_prompt,
 )
 
 
@@ -176,3 +178,98 @@ def test_summarize_does_not_log_api_key(settings, caplog, monkeypatch):
     joined = " ".join(r.getMessage() for r in caplog.records)
     assert "sk-ant-shouldnt-appear-in-logs" not in joined
     assert "sk-ant-also-shouldnt-appear" not in joined
+
+
+# --- Follow-up invitation gate -----------------------------------------
+
+def test_classify_short_modest_response(settings):
+    """Tiny single-paragraph response with no code is modest."""
+    c = _classify_response("Fixed the typo on line 42.", settings)
+    assert c["is_substantial"] is False
+    assert c["has_code"] is False
+    assert c["paragraph_count"] == 1
+
+
+def test_classify_long_response_is_substantial(settings):
+    """Char count above the threshold is enough on its own."""
+    c = _classify_response("x" * 1000, settings)
+    assert c["is_substantial"] is True
+    assert c["char_count"] == 1000
+
+
+def test_classify_code_block_is_substantial(settings):
+    """A fenced code block flips substantial regardless of length."""
+    text = "Done. ```py\ndef f(): pass\n```"
+    c = _classify_response(text, settings)
+    assert c["has_code"] is True
+    assert c["is_substantial"] is True
+
+
+def test_classify_multiple_paragraphs_is_substantial(settings):
+    """Three+ paragraphs (blank-line separated) flips substantial."""
+    text = "First.\n\nSecond.\n\nThird."
+    c = _classify_response(text, settings)
+    assert c["paragraph_count"] == 3
+    assert c["is_substantial"] is True
+
+
+def test_classify_invite_on_code_can_be_disabled(settings):
+    """Turning off invite_on_code drops the code-block signal."""
+    settings.set("voice_followup_invite_on_code", False)
+    c = _classify_response("Done. ```py\ndef f(): pass\n```", settings)
+    assert c["has_code"] is True
+    assert c["is_substantial"] is False  # only signal was code, now disabled
+
+
+def test_classify_thresholds_are_settings_driven(settings):
+    """Lowering min_chars makes shorter input substantial."""
+    settings.set("voice_followup_min_chars", 10)
+    c = _classify_response("a" * 50, settings)
+    assert c["is_substantial"] is True
+
+
+def test_render_prompt_modest_excludes_invite_clause():
+    prompt = _render_prompt(is_substantial=False)
+    assert "cutting-room floor" not in prompt
+    assert "Output only the spoken text" in prompt
+
+
+def test_render_prompt_substantial_includes_invite_clause():
+    prompt = _render_prompt(is_substantial=True)
+    assert "cutting-room floor" in prompt
+    assert "vary, do not repeat verbatim" in prompt
+    assert "Output only the spoken text" in prompt
+
+
+def test_summary_system_prompt_constant_matches_modest_render():
+    """Public constant must match the modest-case rendered prompt."""
+    assert SUMMARY_SYSTEM_PROMPT == _render_prompt(is_substantial=False)
+
+
+def test_substantial_input_sends_invite_clause_to_haiku(settings):
+    """Long/code-heavy input → system arg contains the invite clause."""
+    settings.set("anthropic_api_key", "test-key")
+    s = Summarizer(settings)
+    fake_client = MagicMock()
+    fake_client.messages.create.return_value = _fake_message("Done. Want to dig in?")
+    long_text_with_code = "Long response.\n" * 30 + "\n```py\ncode here\n```"
+    with patch("anthropic.Anthropic", return_value=fake_client):
+        s.summarize(long_text_with_code)
+    _, kwargs = fake_client.messages.create.call_args
+    assert "cutting-room floor" in kwargs["system"]
+
+
+def test_modest_input_omits_invite_clause(settings):
+    """Single-paragraph short response → invite clause absent."""
+    settings.set("anthropic_api_key", "test-key")
+    s = Summarizer(settings)
+    fake_client = MagicMock()
+    fake_client.messages.create.return_value = _fake_message("Got it — done.")
+    # Force an API call by including a newline so the fast-path bypass skips,
+    # but keep it well below the 800-char threshold and single-paragraph.
+    modest_text = "Fixed the bug.\nAll tests pass."
+    with patch("anthropic.Anthropic", return_value=fake_client):
+        s.summarize(modest_text)
+    _, kwargs = fake_client.messages.create.call_args
+    assert "cutting-room floor" not in kwargs["system"]
+    assert kwargs["system"] == SUMMARY_SYSTEM_PROMPT
