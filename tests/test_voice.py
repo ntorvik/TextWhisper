@@ -213,3 +213,28 @@ def test_status_signal_emits_idle_after_speak(svc, tmp_appdata):
         svc.shutdown()
 
     assert "Idle" in statuses
+
+
+def test_speak_one_passes_audio_output_device_to_outputstream(tmp_appdata, qapp):
+    """OutputStream constructor receives the configured device kwarg."""
+    from unittest.mock import MagicMock, patch
+    from src.settings_manager import SettingsManager
+    from src.voice import TTSService
+
+    sm = SettingsManager()
+    sm.set("audio_output_device", 11)
+    sm.set("voice_model", "fake-voice")
+    svc = TTSService(sm)
+
+    fake_voice = MagicMock()
+    fake_voice.config.sample_rate = 22050
+    fake_voice.synthesize.return_value = iter([])
+
+    with patch.object(svc, "_ensure_voice", return_value=fake_voice), \
+         patch("src.voice.sd.OutputStream") as os_cls, \
+         patch("piper.config.SynthesisConfig"):
+        os_cls.return_value.__enter__.return_value = MagicMock()
+        svc._speak_one("hi")
+
+    os_cls.assert_called_once()
+    assert os_cls.call_args.kwargs.get("device") == 11
