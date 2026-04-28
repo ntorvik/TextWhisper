@@ -150,9 +150,13 @@ class TTSService(QObject):
         )
         self.status.emit("Speaking...")
         self.speak_started.emit()
+        device = self.settings.get("audio_output_device")
         try:
             with sd.OutputStream(
-                samplerate=sample_rate, channels=1, dtype="int16"
+                samplerate=sample_rate,
+                channels=1,
+                dtype="int16",
+                device=device,
             ) as stream:
                 for chunk in voice.synthesize(text, syn_config=cfg):
                     if self._interrupt.is_set() or self._stop.is_set():

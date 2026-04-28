@@ -95,3 +95,9 @@ def test_paste_target_lock_defaults_present(tmp_appdata):
     assert sm.get("paste_lock_border_thickness") == 3
     assert sm.get("paste_lock_play_sounds") is True
     assert sm.get("paste_lock_focus_settle_ms") == 50
+
+
+def test_audio_output_device_default_is_none(tmp_appdata):
+    from src.settings_manager import SettingsManager
+    sm = SettingsManager()
+    assert sm.get("audio_output_device") is None

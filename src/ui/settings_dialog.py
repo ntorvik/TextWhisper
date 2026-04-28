@@ -150,12 +150,12 @@ class SettingsDialog(QDialog):
 
         self.tabs = QTabWidget(self)
         self.tabs.addTab(self._build_hotkeys_tab(), "Hotkeys")
+        self.tabs.addTab(self._build_devices_tab(), "Devices")
+        self.tabs.addTab(self._build_dictation_tab(), "Dictation")
         self.tabs.addTab(self._build_paste_lock_tab(), "Paste Lock")
-        self.tabs.addTab(self._build_speech_tab(), "Speech")
-        self.tabs.addTab(self._build_output_tab(), "Output")
+        self.tabs.addTab(self._build_voice_readback_tab(), "Voice Read-Back")
         self.tabs.addTab(self._build_feedback_tab(), "Feedback")
         self.tabs.addTab(self._build_oscilloscope_tab(), "Oscilloscope")
-        self.tabs.addTab(self._build_voice_tab(), "Voice")
         self.tabs.addTab(self._build_about_tab(), "About")
 
         info = QLabel(
@@ -319,7 +319,54 @@ class SettingsDialog(QDialog):
         ):
             w.setEnabled(enabled)
 
-    def _build_speech_tab(self) -> QWidget:
+    def _build_devices_tab(self) -> QWidget:
+        """Audio I/O hardware: microphone input and speaker output."""
+        page = QWidget()
+        form = QFormLayout(page)
+
+        self.mic_combo = QComboBox()
+        self.mic_combo.setObjectName("mic_combo")
+        self.mic_combo.addItem("System default", None)
+        try:
+            for idx, dev in enumerate(sd.query_devices()):
+                if int(dev.get("max_input_channels", 0)) > 0:
+                    self.mic_combo.addItem(f"{idx}: {dev['name']}", idx)
+        except Exception as e:
+            self.mic_combo.addItem(f"(error listing devices: {e})", None)
+        current_mic = self.settings.get("microphone_device")
+        for i in range(self.mic_combo.count()):
+            if self.mic_combo.itemData(i) == current_mic:
+                self.mic_combo.setCurrentIndex(i)
+                break
+        form.addRow("Microphone input:", self.mic_combo)
+
+        self.audio_output_combo = QComboBox()
+        self.audio_output_combo.setObjectName("audio_output_combo")
+        self.audio_output_combo.addItem("System default", None)
+        try:
+            for idx, dev in enumerate(sd.query_devices()):
+                if int(dev.get("max_output_channels", 0)) > 0:
+                    self.audio_output_combo.addItem(f"{idx}: {dev['name']}", idx)
+        except Exception as e:
+            self.audio_output_combo.addItem(f"(error listing devices: {e})", None)
+        current_out = self.settings.get("audio_output_device")
+        for i in range(self.audio_output_combo.count()):
+            if self.audio_output_combo.itemData(i) == current_out:
+                self.audio_output_combo.setCurrentIndex(i)
+                break
+        self.audio_output_combo.setToolTip(
+            "Where chimes and Piper TTS read-back are routed. Useful when "
+            "you have a Bluetooth headset for AI voice + a separate speaker "
+            "for system audio. Changes apply immediately on Save."
+        )
+        form.addRow("Audio output:", self.audio_output_combo)
+
+        return page
+
+    def _build_dictation_tab(self) -> QWidget:
+        """Speech-to-text pipeline: Whisper engine + VAD + text output method.
+
+        Replaces the previous separate Speech and Output tabs (v1.4.0)."""
         page = QWidget()
         form = QFormLayout(page)
 
@@ -333,27 +380,12 @@ class SettingsDialog(QDialog):
         self.device_combo = QComboBox()
         self.device_combo.addItems(["cuda", "cpu", "auto"])
         self.device_combo.setCurrentText(str(self.settings.get("device", "cuda")))
-        form.addRow("Device:", self.device_combo)
+        form.addRow("Compute device:", self.device_combo)
 
         self.compute_combo = QComboBox()
         self.compute_combo.addItems(["float16", "int8_float16", "int8", "float32"])
         self.compute_combo.setCurrentText(str(self.settings.get("compute_type", "float16")))
         form.addRow("Compute type:", self.compute_combo)
-
-        self.mic_combo = QComboBox()
-        self.mic_combo.addItem("System default", None)
-        try:
-            for idx, dev in enumerate(sd.query_devices()):
-                if int(dev.get("max_input_channels", 0)) > 0:
-                    self.mic_combo.addItem(f"{idx}: {dev['name']}", idx)
-        except Exception as e:
-            self.mic_combo.addItem(f"(error listing devices: {e})", None)
-        current_mic = self.settings.get("microphone_device")
-        for i in range(self.mic_combo.count()):
-            if self.mic_combo.itemData(i) == current_mic:
-                self.mic_combo.setCurrentIndex(i)
-                break
-        form.addRow("Microphone:", self.mic_combo)
 
         self.lang_combo = QComboBox()
         self.lang_combo.setEditable(True)
@@ -400,22 +432,17 @@ class SettingsDialog(QDialog):
         )
         self.continuation_window_spin.setToolTip(
             "How quickly you must resume speaking after a typed segment for "
-            "its trailing period to be demoted to a comma. Shorter values "
-            "(~300 ms) only catch genuine breath-pauses; longer values "
-            "(~800 ms) merge sentences more aggressively."
+            "its trailing period to be demoted to a comma."
         )
         self.continuation_window_spin.setEnabled(self.continuation_check.isChecked())
         self.continuation_check.toggled.connect(
             self.continuation_window_spin.setEnabled
         )
         form.addRow("Continuation window:", self.continuation_window_spin)
-        return page
 
-    def _build_output_tab(self) -> QWidget:
-        page = QWidget()
-        form = QFormLayout(page)
-
+        # --- Text output method (was on the separate Output tab) ---
         self.output_method_combo = QComboBox()
+        self.output_method_combo.setObjectName("output_method_combo")
         self.output_method_combo.addItem("Type (char-by-char keystrokes)", "type")
         self.output_method_combo.addItem("Paste (clipboard + Ctrl+V)", "paste")
         current_method = str(self.settings.get("output_method", "type"))
@@ -432,6 +459,7 @@ class SettingsDialog(QDialog):
         form.addRow("Output method:", self.output_method_combo)
 
         self.delay_spin = QSpinBox()
+        self.delay_spin.setObjectName("delay_spin")
         self.delay_spin.setRange(0, 50)
         self.delay_spin.setSuffix(" ms")
         self.delay_spin.setValue(int(self.settings.get("type_delay_ms", 4)))
@@ -440,6 +468,7 @@ class SettingsDialog(QDialog):
         self.auto_enter_check = QCheckBox(
             "Auto-press Enter after each transcription (hands-free)"
         )
+        self.auto_enter_check.setObjectName("auto_enter_check")
         self.auto_enter_check.setChecked(
             bool(self.settings.get("auto_enter_enabled", False))
         )
@@ -593,7 +622,7 @@ class SettingsDialog(QDialog):
         form.addRow("", self._row(self.osc_reset_pos_btn, self.osc_reset_size_btn, stretch=True))
         return page
 
-    def _build_voice_tab(self) -> QWidget:
+    def _build_voice_readback_tab(self) -> QWidget:
         """TTS read-back of Claude Code responses (the hands-free other half).
 
         Stop hook → TextWhisper → summarise via Haiku → Piper → speakers.
@@ -986,6 +1015,7 @@ class SettingsDialog(QDialog):
         self.settings.set("device", self.device_combo.currentText())
         self.settings.set("compute_type", self.compute_combo.currentText())
         self.settings.set("microphone_device", self.mic_combo.currentData())
+        self.settings.set("audio_output_device", self.audio_output_combo.currentData())
         self.settings.set("language", self.lang_combo.currentText().strip() or "auto")
         self.settings.set("vad_silence_ms", int(self.silence_spin.value()))
         self.settings.set("vad_threshold", float(self.thresh_spin.value()))

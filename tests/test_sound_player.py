@@ -127,3 +127,39 @@ def test_play_unlock_calls_sd_play_when_enabled(tmp_appdata):
     with patch("src.sound_player.sd.play") as p:
         sp.play_unlock()
         p.assert_called_once()
+
+
+def test_play_passes_audio_output_device_to_sd(tmp_appdata, qapp):
+    from unittest.mock import patch
+    from src.settings_manager import SettingsManager
+    from src.sound_player import SoundPlayer
+
+    sm = SettingsManager()
+    sm.set("audio_output_device", 7)
+    sm.set("play_ready_sound", True)
+    sp = SoundPlayer(sm)
+    with patch("src.sound_player.sd.play") as p:
+        sp.play_ready()
+    p.assert_called_once()
+    call = p.call_args
+    device = call.kwargs.get("device")
+    if device is None and len(call.args) >= 3:
+        device = call.args[2]
+    assert device == 7
+
+
+def test_play_passes_none_when_setting_absent(tmp_appdata, qapp):
+    from unittest.mock import patch
+    from src.settings_manager import SettingsManager
+    from src.sound_player import SoundPlayer
+
+    sm = SettingsManager()
+    sm.set("play_ready_sound", True)
+    sp = SoundPlayer(sm)
+    with patch("src.sound_player.sd.play") as p:
+        sp.play_ready()
+    call = p.call_args
+    device = call.kwargs.get("device")
+    if device is None and len(call.args) >= 3:
+        device = call.args[2]
+    assert device is None

@@ -874,3 +874,32 @@ def test_target_invalid_closed_notifies_and_clears_silently(app):
         app._on_target_invalid("closed")
     n.assert_called_once()
     cs.assert_called_once()
+
+
+def test_app_wires_tts_signals_to_mic_muter(app):
+    """speak_started → mic_muter.on_tts_started; speak_finished → on_tts_finished."""
+    on_start = MagicMock()
+    on_end = MagicMock()
+    app.tts.speak_started.connect(on_start)
+    app.tts.speak_finished.connect(on_end)
+    # Sanity: the muter is wired and reacts to the emits too.
+    app.mic_muter._is_muted = False
+    app.tts.speak_started.emit()
+    assert app.mic_muter.is_muted is True
+    on_start.assert_called_once()
+    app.tts.speak_finished.emit()
+    on_end.assert_called_once()
+    # speak_finished should have armed the resume timer (proof the slot ran).
+    assert app.mic_muter._resume_timer.isActive()
+
+
+def test_voice_interrupt_hotkey_flushes_audio(app):
+    """Pressing voice_interrupt cuts TTS AND flushes any in-flight audio
+    so a sliver of TTS that leaked into the mic before auto-mute kicked
+    in cannot become a paste."""
+    from unittest.mock import patch
+    with patch.object(app.tts, "interrupt") as ti, \
+         patch.object(app.audio, "flush") as af:
+        app._on_hotkey_triggered("voice_interrupt")
+    ti.assert_called_once()
+    af.assert_called_once()

@@ -53,6 +53,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "device": "cuda",
     "language": "auto",
     "microphone_device": None,
+    "audio_output_device": None,    # int (portaudio device index) or None for system default
     "vad_silence_ms": 700,
     "vad_threshold": 0.012,
     "vad_min_segment_ms": 350,

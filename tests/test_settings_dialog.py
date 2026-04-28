@@ -75,3 +75,74 @@ def test_paste_target_lock_section_writes_back_to_settings(
     )
     dlg._save()
     assert sm.get("paste_lock_enabled") is True
+
+
+def test_settings_dialog_has_devices_tab_with_both_combos(qapp, tmp_appdata):
+    from src.settings_manager import SettingsManager
+    from src.ui.settings_dialog import SettingsDialog
+
+    sm = SettingsManager()
+    dlg = SettingsDialog(sm)
+    names = {w.objectName() for w in dlg.findChildren(object) if w.objectName()}
+    assert "mic_combo" in names
+    assert "audio_output_combo" in names
+
+
+def test_settings_dialog_tab_order_matches_spec(qapp, tmp_appdata):
+    from src.settings_manager import SettingsManager
+    from src.ui.settings_dialog import SettingsDialog
+
+    sm = SettingsManager()
+    dlg = SettingsDialog(sm)
+    titles = [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())]
+    assert titles == [
+        "Hotkeys",
+        "Devices",
+        "Dictation",
+        "Paste Lock",
+        "Voice Read-Back",
+        "Feedback",
+        "Oscilloscope",
+        "About",
+    ]
+
+
+def test_settings_dialog_dictation_tab_contains_output_widgets(qapp, tmp_appdata):
+    from src.settings_manager import SettingsManager
+    from src.ui.settings_dialog import SettingsDialog
+
+    sm = SettingsManager()
+    dlg = SettingsDialog(sm)
+    dictation_idx = next(
+        i for i in range(dlg.tabs.count()) if dlg.tabs.tabText(i) == "Dictation"
+    )
+    page = dlg.tabs.widget(dictation_idx)
+    assert page.findChild(object, "output_method_combo") is not None
+    assert page.findChild(object, "delay_spin") is not None
+    assert page.findChild(object, "auto_enter_check") is not None
+
+
+def test_audio_output_device_persists_through_save(qapp, tmp_appdata, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    from src.settings_manager import SettingsManager
+    from src.ui.settings_dialog import SettingsDialog
+
+    # Use chord-style hotkeys so _save() doesn't pop a modal warning.
+    sm = SettingsManager()
+    sm.set("hotkey", "<alt>+z")
+    sm.set("delete_hotkey", "<ctrl>+<backspace>")
+    dlg = SettingsDialog(sm)
+    combo = dlg.findChild(object, "audio_output_combo")
+    assert combo is not None
+    if combo.count() > 1:
+        combo.setCurrentIndex(1)
+        expected = combo.itemData(1)
+    else:
+        expected = None
+    dlg.accept = lambda: None
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda *a, **kw: QMessageBox.StandardButton.Ok
+    )
+    dlg._save()
+    assert sm.get("audio_output_device") == expected

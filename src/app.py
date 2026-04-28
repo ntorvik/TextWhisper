@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from .audio_capture import AudioCapture
 from .hotkey_manager import HotkeyManager, chars_inserted_per_press
 from .keyboard_output import KeyboardOutput
+from .mic_muter import MicMuter
 from .settings_manager import SettingsManager
 from .sound_player import SoundPlayer
 from .summarizer import Summarizer
@@ -42,6 +43,7 @@ class TextWhisperApp(QObject):
         self.tray = TrayController(parent=self, settings=self.settings)
         self.oscilloscope = OscilloscopeWidget(self.settings)
         self.tts = TTSService(self.settings)
+        self.mic_muter = MicMuter(self.audio)
         self.summarizer = Summarizer(self.settings)
         self.voice_ipc = VoiceIPCServer(self.settings, self.tts, self.summarizer)
         self.paste_target = PasteTargetController(self.settings)
@@ -258,6 +260,8 @@ class TextWhisperApp(QObject):
         self.tts.speak_finished.connect(
             lambda: self.tray.set_voice_speaking(False)
         )
+        self.tts.speak_started.connect(self.mic_muter.on_tts_started)
+        self.tts.speak_finished.connect(self.mic_muter.on_tts_finished)
 
         self.paste_target.lock_changed.connect(self._on_lock_changed)
         self.paste_target.target_invalid.connect(self._on_target_invalid)
@@ -477,6 +481,10 @@ class TextWhisperApp(QObject):
             self._on_delete_pressed()
         elif name == "voice_interrupt":
             self.tts.interrupt()
+            # Discard any partially-captured audio + suppress the next
+            # finished segment so a sliver of TTS that leaked into the
+            # mic before auto-mute kicked in cannot become a paste.
+            self.audio.flush()
         elif name == "lock_toggle":
             self.paste_target.toggle_sticky()
         else:

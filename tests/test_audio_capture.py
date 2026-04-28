@@ -304,3 +304,52 @@ def test_speech_ended_fires_once_per_utterance(tmp_appdata, qapp):
         _emit_block(cap, _silence(0.0))
     qapp.processEvents()
     assert len(ends) == 2
+
+
+def test_flush_drops_buffered_audio_and_resets_state(qapp, tmp_appdata):
+    """flush() clears any partially-captured audio + resets VAD state."""
+    import numpy as np
+    from src.audio_capture import AudioCapture
+    from src.settings_manager import SettingsManager
+
+    sm = SettingsManager()
+    cap = AudioCapture(sm)
+    cap._buffer.append(np.ones(480, dtype=np.float32))
+    cap._buffered_samples = 480
+    cap._has_speech = True
+    cap._silence_blocks = 5
+
+    cap.flush()
+
+    assert cap._buffer == []
+    assert cap._buffered_samples == 0
+    assert cap._has_speech is False
+    assert cap._silence_blocks == 0
+    assert cap._discard_next_segment is True
+
+
+def test_flush_then_emit_suppresses_next_segment_ready(qapp, tmp_appdata):
+    """After flush(), the next finished segment is dropped (no emit)."""
+    import numpy as np
+    from src.audio_capture import AudioCapture
+    from src.settings_manager import SettingsManager
+
+    sm = SettingsManager()
+    cap = AudioCapture(sm)
+    received: list = []
+    cap.segment_ready.connect(received.append)
+
+    cap.flush()
+    cap._buffer.append(np.ones(16000, dtype=np.float32))
+    cap._buffered_samples = 16000
+    cap._has_speech = True
+    cap._emit_locked(min_samples=0)
+
+    assert received == [], "first post-flush segment must be discarded"
+    assert cap._discard_next_segment is False, "flag must clear after one suppression"
+
+    cap._buffer.append(np.ones(16000, dtype=np.float32))
+    cap._buffered_samples = 16000
+    cap._has_speech = True
+    cap._emit_locked(min_samples=0)
+    assert len(received) == 1, "post-flag-clear segment must emit"

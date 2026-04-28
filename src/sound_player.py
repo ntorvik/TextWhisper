@@ -96,8 +96,9 @@ class SoundPlayer:
     def _play(self, samples: np.ndarray) -> None:
         if samples.size == 0:
             return
+        device = self.settings.get("audio_output_device")
         try:
-            sd.play(samples, _SAMPLE_RATE)
+            sd.play(samples, _SAMPLE_RATE, device=device)
         except Exception:
             # Output device unavailable, busy, etc. — non-fatal.
             log.exception("Sound playback failed")
