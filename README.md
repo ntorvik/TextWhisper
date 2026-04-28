@@ -1,8 +1,8 @@
 # TextWhisper
 
-> Local, offline voice-to-text. Press a hotkey, talk, and your words appear in whatever app has focus.
+> Local, offline voice-to-text — with optional voice read-back of Claude Code. Press a hotkey, talk, your words appear in whatever app has focus. Optionally listen to Claude Code's responses through a local neural voice instead of staring at the screen.
 
-**Cross-platform** (Windows / Linux / macOS), powered by [faster-whisper](https://github.com/SYSTRAN/faster-whisper). No cloud, no API calls — everything runs on your machine.
+**Cross-platform** (Windows / Linux / macOS), powered by [faster-whisper](https://github.com/SYSTRAN/faster-whisper). Transcription runs entirely on your machine — no cloud, no API calls. The optional voice read-back uses [Piper](https://github.com/rhasspy/piper) (local neural TTS) plus a small [Anthropic Haiku](https://www.anthropic.com/) summarisation pass to deliver a peer-toned, hands-free pairing loop with Claude Code.
 
 ---
 
@@ -87,13 +87,31 @@ The first launch downloads the Whisper model (~1.5 GB for `large-v3`) into the H
 - **Two output modes**:
   - *Type* — per-character keystrokes (works in most apps).
   - *Paste* — clipboard + Ctrl+V, with a real `Key.space` keystroke injected after each paste. Reliable in terminals and IDEs that strip trailing whitespace from clipboard pastes.
+- **Audio device routing** — pick a specific microphone for input *and* a separate output device for chimes + read-back. The Devices tab automatically deduplicates devices that PortAudio lists once per host API and prefers WASAPI on Windows for lowest latency.
 
 ### Editing
 - **Delete-word hotkey** (default `Delete`, configurable):
   - **Single tap** → Ctrl+Backspace (delete previous word).
   - **Double tap** → erase the entire last transcription.
   - Maintains a **stack of typed segments** — keep double-tapping to walk backwards through your dictation history.
+- **Auto-Enter** — after a transcription is typed, optionally press Enter for you N ms later. Pressing any key during the window silently cancels the pending Enter. Useful for fully hands-free Claude Code / chat workflows.
+- **Continuation detection** ("treat short pauses as commas") — Whisper transcribes each VAD-cut segment in isolation and ends every segment with a period, even when you were just taking a breath. With this on, if you resume speaking within the continuation window, that trailing period is rewritten as `,` and the next segment's first letter lowercased. Result: one flowing sentence instead of choppy stand-alone ones.
 - **Hotkey recorder** — press *Record...* in Settings and press the chord you want. Supports any key including `+`, `<f9>`, etc. Live conflict warning if you pick a chord that collides with the dictation hotkey or has no modifier.
+
+### Voice read-back of Claude Code
+The hands-free other half of TextWhisper. A small [Stop hook](tools/claude-code-stop-hook.py) registered with Claude Code POSTs each finished assistant turn to TextWhisper, which summarises it via Anthropic Haiku and speaks the summary aloud through Piper (a local neural TTS) — letting you keep your eyes off the screen while pairing.
+- **Peer-toned summaries** — the prompt frames the model as a teammate, pushes for 1-2 sentence gists with contractions, and explicitly strips Claude Code's own self-asked "Want me to also...?" tail.
+- **Smart follow-up gate** — TextWhisper only adds a varied "want me to walk through it?" line when the raw response was actually substantial (`> 800 chars`, contains a fenced code block, or `>= 3` paragraphs — all tunable in `config.json`). No grating "let me know if you want more" on trivial responses.
+- **Voice interrupt hotkey** (default `Ctrl+Alt+S`) cuts speech mid-stream and flushes any in-flight audio.
+- **Mic auto-mutes** while TTS is speaking, so the AI's voice never gets re-transcribed back into your dictation if you press the dictation hotkey too early.
+- **Stays on Haiku** for cost — the persona is encoded in the prompt, not the model. ~5x cheaper than Sonnet for the same loop.
+- Optional summarisation can be turned off entirely (`voice_summarize: false` in config) to read raw assistant text verbatim.
+
+### Paste-target lock
+For long sessions where you want every dictation to land in one specific window even if focus drifts:
+- **Smart toggle hotkey** (default `Alt+L`): lock current window / re-lock to current / unlock if already locked here.
+- **Colored border** around the locked window (configurable color + thickness, can be disabled).
+- **Optional lock/unlock chimes**.
 
 ### Visualization
 - **Floating oscilloscope** — a real shaped, frameless, always-on-top window. Click-through transparent corners (Windows 11 DWM corner override + `QRegion` mask).
@@ -109,7 +127,7 @@ The first launch downloads the Whisper model (~1.5 GB for `large-v3`) into the H
 
 ### Lifecycle
 - **Single-instance lock** — clicking the launcher twice just brings up "TextWhisper is already running" instead of stacking processes.
-- **Crash logger** at `%APPDATA%\TextWhisper\logs\textwhisper.log` (Windows) or `~/.config/TextWhisper/logs/textwhisper.log` (Linux/macOS), rotated at 1 MB × 3 — every transcription, every hotkey event, every keyboard injection result, plus full tracebacks on errors.
+- **Crash logger** at `%APPDATA%\TextWhisper\logs\textwhisper.log` (Windows) or `~/.config/TextWhisper/logs/textwhisper.log` (Linux/macOS), rotated at 1 MB × 3 — every transcription, every hotkey event, every keyboard injection result, plus full tracebacks on errors. The Anthropic API key is **never** logged.
 
 ### Persistence
 Config lives at:
@@ -133,11 +151,37 @@ Config lives at:
 
 Right-click the tray icon for: Start/Stop, Show/Hide oscilloscope, Settings, Exit. Double-clicking the tray icon also toggles capture.
 
+### Voice read-back setup (optional)
+
+To listen to Claude Code responses through TTS instead of reading them:
+
+1. Open Settings → **Voice Read-Back**, tick *Enable read-back*, paste an Anthropic API key (or set `ANTHROPIC_API_KEY` in your env), and click **Test voice**. The first test triggers a one-time Piper + voice-model download (~110 MB).
+2. Register the bundled Stop hook with Claude Code by adding this to `~/.claude/settings.json`:
+   ```json
+   {
+     "hooks": {
+       "Stop": [
+         {
+           "matcher": "*",
+           "hooks": [
+             {"type": "command",
+              "command": "py \"PATH/TO/TextWhisper/tools/claude-code-stop-hook.py\""}
+           ]
+         }
+       ]
+     }
+   }
+   ```
+   Linux/macOS: replace `py` with `python3` and use a forward-slash path.
+3. Use Claude Code as normal. Each finished response is summarised by Haiku and spoken by Piper. Press **Ctrl+Alt+S** to interrupt mid-sentence; ask a follow-up by just dictating "tell me more about that" — it goes to Claude Code as the next turn and the response gets read back the same way.
+
+Tuning: if the follow-up "want me to walk through it?" line fires too often, bump `voice_followup_min_chars` in `%APPDATA%\TextWhisper\config.json` (default 800).
+
 ---
 
 ## Settings
 
-Right-click tray → **Settings...**
+Right-click tray → **Settings...** Tabs: *Hotkeys*, *Devices*, *Dictation*, *Paste Lock*, *Voice Read-Back*, *Feedback*, *Oscilloscope*, *About*.
 
 ### Hotkeys
 | | |
@@ -146,22 +190,53 @@ Right-click tray → **Settings...**
 | Delete-word hotkey | Same UI. Single-tap = delete word, double-tap = erase last transcription. |
 | Double-tap window | Window for upgrading single-tap to double-tap. Default 350 ms. |
 
-### Output
+### Devices
 | | |
 |--|--|
-| Output method | *Type* — per-character keystrokes (works in most apps). *Paste* — clipboard + Ctrl+V (more reliable in terminals like Claude Code, Windows Terminal, IDE consoles). |
-| Per-character type delay | 0–50 ms. Bump it up if a particular app drops keystrokes in Type mode. |
+| Microphone input | System default or any specific input device. List is automatically deduplicated and prefers WASAPI on Windows. |
+| Audio output | Where chimes and Piper TTS read-back are routed. Useful when you have a Bluetooth headset for AI voice + a separate speaker for system audio. |
 
-### Whisper engine
+### Dictation
+Speech-to-text pipeline (Whisper engine + VAD + text output method).
+
 | | |
 |--|--|
-| Model | `tiny`, `base`, `small`, `medium`, `large-v3` |
-| Device | `cuda`, `cpu`, `auto` |
+| Whisper model | `tiny`, `base`, `small`, `medium`, `large-v3`, `large-v3-turbo` |
+| Compute device | `cuda`, `cpu`, `auto` |
 | Compute type | `float16` (recommended on GPU), `int8_float16`, `int8`, `float32` |
-| Microphone | System default or any specific input device |
 | Language | `auto` (Whisper detects), or ISO code (`en`, `es`, `fr`, `ja`, …) |
 | Silence pause | How long a pause must be before flushing an utterance for transcription |
 | Voice threshold | RMS threshold above which audio is considered speech (0.005–0.05 typical) |
+| Continuation | "Treat short pauses as commas" toggle + window |
+| Output method | *Type* — per-character keystrokes (works in most apps). *Paste* — clipboard + Ctrl+V (more reliable in terminals like Claude Code, Windows Terminal, IDE consoles). |
+| Per-character type delay | 0–50 ms. Bump it up if a particular app drops keystrokes in Type mode. |
+| Auto-Enter | Toggle + delay (200–30000 ms). Press any key during the delay to silently cancel. |
+
+### Paste Lock
+| | |
+|--|--|
+| Enable paste-target lock | Master toggle. |
+| Lock toggle hotkey | Default `Alt+L`. Smart toggle: lock current / re-lock / unlock. |
+| Border around locked window | On/off, color (palette + custom picker), thickness 1–10 px. |
+| Play tone on lock/unlock | Optional chime. |
+
+### Voice Read-Back
+Read Claude Code's responses aloud via Piper neural TTS, summarised by Anthropic Haiku.
+
+| | |
+|--|--|
+| Voice read-back | Master toggle. |
+| Engine | `piper` (local neural). |
+| Voice model | Piper voice ID (e.g. `en_US-amy-medium`). Downloaded on first use into `%APPDATA%\TextWhisper\piper\voices\`. Editable — type any model from `rhasspy/piper-voices` on Hugging Face. |
+| Rate | 0.5–2.0× speech rate multiplier. |
+| Volume | 0–100%. |
+| Summarise | When on, each response is rewritten by Haiku into a peer-toned 1-2 sentence read-back. When off, raw assistant text is read verbatim (brutal — only useful for cost-sensitive setups). |
+| Anthropic API key | Stored locally in `config.json`, never logged. Leave blank to fall back to `ANTHROPIC_API_KEY`. |
+| Interrupt hotkey | Default `Ctrl+Alt+S` — cuts speech mid-stream and flushes audio. |
+| IPC port | Localhost port the Claude Code Stop hook POSTs to. Default 47821. |
+| Test voice | Plays a short sample with the current model + rate + volume. First click triggers the one-time Piper + voice-model download (~110 MB). |
+
+Three follow-up-gate thresholds (`voice_followup_min_chars`, `voice_followup_min_paragraphs`, `voice_followup_invite_on_code`) live in `config.json` only — tweak them if invitations fire too often or never.
 
 ### Feedback
 | | |
@@ -179,7 +254,7 @@ Right-click tray → **Settings...**
 | Width / Height / Opacity / Background alpha | All live-applied on save |
 | Active / Idle color | 10-color palette + custom color picker |
 
-Changes apply immediately. Switching Whisper model or device reloads the model in the background.
+Changes apply immediately. Switching Whisper model or device reloads the model in the background. Hotkey and microphone changes apply on save.
 
 ---
 
@@ -250,13 +325,23 @@ TextWhisper/
     keyboard_output.py               Type / Paste output modes
     hotkey_manager.py                pynput Listener + custom hotkey parser
     sound_player.py                  pre-generated chime tones
+    paste_target.py                  paste-target lock state machine
+    win32_window_utils.py            Win32 window discovery / focus helpers
+    mic_muter.py                     auto-mutes the mic while Piper TTS speaks
+    voice.py                         Piper neural TTS engine + voice-model cache
+    voice_server.py                  ThreadingHTTPServer accepting /speak from the Stop hook
+    summarizer.py                    Anthropic Haiku call with peer-tone prompt + follow-up gate
     ui/
       tray.py                        QSystemTrayIcon + context menu
       oscilloscope.py                shaped, masked, draggable waveform/spectrum widget
       settings_dialog.py             Qt dialog
       hotkey_recorder.py             modal "press a chord" dialog
+      window_border_overlay.py       colored frame around the locked paste target
 
-  tests/                             207 pytest tests covering everything above
+  tools/
+    claude-code-stop-hook.py         stdlib-only bridge: Claude Code Stop event → TextWhisper /speak
+
+  tests/                             400+ pytest tests covering everything above
 ```
 
 ---
@@ -264,13 +349,16 @@ TextWhisper/
 ## Troubleshooting
 
 - **`Library cublas64_12.dll is not found` (Windows)** — re-run `install.bat`, or install CUDA 12.x + cuDNN 9 system-wide.
-- **No audio captured** — pick the correct mic in Settings → Microphone. Verify OS mic permissions for Python (Windows Privacy settings, macOS System Settings → Privacy → Microphone, Linux PulseAudio/PipeWire device).
+- **No audio captured** — pick the correct mic in Settings → Devices → Microphone input. Verify OS mic permissions for Python (Windows Privacy settings, macOS System Settings → Privacy → Microphone, Linux PulseAudio/PipeWire device).
 - **Hotkey doesn't fire** — most likely something else on your system is consuming the key first (PowerToys Keyboard Manager, AutoHotKey, vendor keyboard software, clipboard managers, BetterTouchTool on macOS). Pick a chord with a modifier (e.g. `<ctrl>+<backspace>`); the Settings warning will flag bare/single-key hotkeys.
 - **Linux: hotkeys don't work at all** — you're probably on Wayland. Log out and back in with an X11 session.
 - **macOS: hotkeys don't work** — System Settings → Privacy & Security → **Accessibility** → make sure Python (or TextWhisper.app) is enabled. Same for **Microphone**.
 - **Latency too high** — drop to `medium` or `small` in Settings. `large-v3` on a 16 GB GPU is sub-second per utterance; smaller models are near-instant.
 - **Spaces missing between segments in a terminal app** — switch *Output method* to *Paste*. Real `Key.space` keystrokes survive terminal paste-strip behavior.
 - **Run as Administrator (Windows)** if you need to dictate into elevated apps. pynput can't inject keystrokes from a non-elevated process into an elevated window.
+- **Voice read-back: nothing happens after a Claude Code response** — verify *Enable read-back* is on in the Voice tab, an Anthropic API key is set (Settings or `ANTHROPIC_API_KEY`), and the Stop hook is registered in `~/.claude/settings.json`. Check `%APPDATA%\TextWhisper\stop-hook.log` for hook errors.
+- **Voice read-back: invitations like "want me to walk through it?" fire on every response** — the gate is configurable: bump `voice_followup_min_chars` in `config.json` (default 800). To suppress invitations entirely, raise it to a very large number.
+- **Voice read-back going to the wrong speakers** — pick a specific output device in Settings → Devices. Routing chimes + TTS to a Bluetooth headset while keeping system audio on speakers is a common setup.
 
 ---
 
@@ -283,7 +371,9 @@ MIT. See [LICENSE](LICENSE).
 ## Acknowledgements
 
 Built on:
-- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (CTranslate2 + Whisper)
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (CTranslate2 + Whisper) — transcription
+- [Piper](https://github.com/rhasspy/piper) — local neural TTS for read-back
+- [Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python) — Haiku summarisation pass
 - [pynput](https://github.com/moses-palmer/pynput) for global hotkeys + keyboard injection
 - [sounddevice](https://python-sounddevice.readthedocs.io/) for microphone I/O
 - [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) for the UI
